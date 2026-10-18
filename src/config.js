@@ -1,5 +1,4 @@
-// Shared tuning + content definitions. Every module reads from here; device profile is imported for adaptive quality.
-import { getAutoQualityTier } from './core/devicePerf.js';
+import { getAutoQualityTier, getDeviceProfile, getHardwareTier } from './core/devicePerf.js';
 
 export const GAME_TITLE = 'INKWAVE';
 export const GAME_SUBTITLE = 'Turf Riot';
@@ -611,82 +610,135 @@ export const DEFAULT_SETTINGS = {
   touchInvertY: false,      // kept separate from invertY: the natural touch mapping is usually the opposite of the mouse's
 };
 
-// The renderer's view of the quality tier. On mobile / touch devices, clamp DPR aggressively, disable
-// post-processing passes (SMAA, bloom, AO) on low and medium, and size the shadow map and paint atlas
-// to fit mobile tile-based GPUs without memory pressure.
+// Device-Relative Quality Architecture:
+// Rather than applying static fixed multipliers, every preset ('auto', 'low', 'medium', 'high', 'ultra')
+// scales relative to the device's actual hardware class (Enthusiast, High/Gaming Laptop, Mainstream Laptop, Low/Mobile)
+// to guarantee maximum visual fidelity without thermal runaway, fan noise, or frame drops.
 export function rendererQuality(settings, touch) {
-  let tier = settings?.quality || 'auto';
-  if (tier === 'auto') {
-    tier = getAutoQualityTier();
-  }
-  const q = QUALITY[tier] || QUALITY.high;
-  if (!touch) return q;
-
+  const chosen = (typeof settings === 'string' ? settings : settings?.quality) || 'auto';
+  const profile = typeof getDeviceProfile === 'function' ? getDeviceProfile() : { hwTier: 'medium', isMobile: false };
+  const hw = profile.hwTier || 'medium';
+  const isMobile = !!(touch || profile.isMobile);
+  const isLaptop = !!profile.hasBattery && !isMobile;
   const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
-  let pr = q.pixelRatio;
-  let shadow = q.shadowSize;
-  let smaa = false;
+
+  // Resolve preset: 'auto' selects the optimal thermal/performance tier for this hardware class
+  let effectiveTier = chosen;
+  if (chosen === 'auto') {
+    if (hw === 'enthusiast') effectiveTier = 'high';
+    else if (hw === 'high') effectiveTier = isLaptop ? 'medium' : 'high';
+    else if (hw === 'medium') effectiveTier = isMobile ? 'low' : 'medium';
+    else effectiveTier = 'low';
+  }
+
+  let pr = 1.0;
+  let shadow = 1024;
+  let directRender = false;
   let bloom = false;
   let ao = false;
+  let smaa = false;
   let msaa = 0;
-  let paintAtlas = q.paintAtlas;
+  let paintAtlas = 2048;
+  let particles = 0.8;
 
-  if (tier === 'low') {
-    pr = Math.min(dpr, 0.75);
-    shadow = 512;
-    paintAtlas = 1024;
-    smaa = false;
-    bloom = false;
-    ao = false;
-    msaa = 0;
-  } else if (tier === 'medium') {
-    pr = Math.min(dpr, 0.85);
-    shadow = 512;
-    paintAtlas = 1024;
-    smaa = false;
-    bloom = false;
-    ao = false;
-    msaa = 0;
-  } else if (tier === 'high') {
-    pr = Math.min(dpr, 1.25);
-    shadow = Math.min(q.shadowSize, 2048);
-    paintAtlas = 2048;
-    smaa = false;
-    bloom = !!q.bloom;
-    ao = false;
-    msaa = 0;
-  } else {
-    // ultra
-    pr = Math.min(dpr, 1.5);
-    shadow = 2048;
-    paintAtlas = 4096;
-    smaa = true;
-    bloom = !!q.bloom;
-    ao = !!q.ao;
-    msaa = 2;
+  switch (hw) {
+    case 'enthusiast': {
+      // High-end desktop workstation / desktop DTR (RTX 4080/4090, 7900 XTX, M2/M3 Max)
+      if (effectiveTier === 'low') {
+        pr = Math.min(dpr, 1.0); shadow = 1024; directRender = true; particles = 0.7;
+      } else if (effectiveTier === 'medium') {
+        pr = Math.min(dpr, 1.25); shadow = 1536; bloom = true; smaa = true; particles = 0.9;
+      } else if (effectiveTier === 'high') {
+        pr = Math.min(dpr, 1.5); shadow = 2048; bloom = true; ao = true; smaa = true; paintAtlas = 4096; particles = 1.0;
+      } else {
+        // ultra: enthusiast 4K / high-sampling
+        pr = Math.min(dpr, 2.0); shadow = 4096; msaa = 4; bloom = true; ao = true; smaa = true; paintAtlas = 4096; particles = 1.0;
+      }
+      break;
+    }
+
+    case 'high': {
+      // Mainstream gaming laptops (RTX 3050/3060/4050/4060), Apple M1/M2/M3 Pro, high-end mobile
+      // Clamped so high/ultra don't cause 90°C thermal throttling or screaming fans
+      if (effectiveTier === 'low') {
+        pr = Math.min(dpr, isMobile ? 0.75 : 0.85); shadow = 512; directRender = true; particles = 0.6;
+      } else if (effectiveTier === 'medium') {
+        pr = Math.min(dpr, isMobile ? 0.85 : 1.0); shadow = isMobile ? 512 : 1024;
+        directRender = isMobile; bloom = !isMobile; smaa = !isMobile; particles = 0.8;
+      } else if (effectiveTier === 'high') {
+        pr = Math.min(dpr, isMobile ? 1.0 : 1.15); shadow = isMobile ? 1024 : 1536;
+        bloom = true; ao = !isMobile; smaa = !isMobile; paintAtlas = 2048; particles = 1.0;
+      } else {
+        // ultra: maximum safe fidelity without 90°C thermal throttling (caps shadows to 2048 and skips 4x MSAA)
+        pr = Math.min(dpr, isMobile ? 1.15 : 1.25); shadow = isMobile ? 1024 : 2048;
+        bloom = true; ao = !isMobile; smaa = !isMobile; paintAtlas = 2048; particles = 1.0;
+      }
+      break;
+    }
+
+    case 'medium': {
+      // Mainstream laptops (Iris Xe, Vega, Radeon 680M/780M, GTX 1650), mid-tier phones
+      // Prioritizes direct rendering and 60 FPS cool thermals
+      if (effectiveTier === 'low') {
+        pr = Math.min(dpr, isMobile ? 0.65 : 0.75); shadow = isMobile ? 0 : 512; directRender = true; particles = 0.5; paintAtlas = 1024;
+      } else if (effectiveTier === 'medium') {
+        pr = Math.min(dpr, isMobile ? 0.75 : 0.85); shadow = 512; directRender = true; particles = 0.7; paintAtlas = 1024;
+      } else if (effectiveTier === 'high') {
+        pr = Math.min(dpr, isMobile ? 0.85 : 1.0); shadow = 1024; bloom = true; directRender = isMobile; particles = 0.8;
+      } else {
+        // ultra: native 1:1, 1024 shadows, bloom, no heavy GTAO
+        pr = Math.min(dpr, isMobile ? 0.95 : 1.0); shadow = 1024; bloom = true; particles = 0.9;
+      }
+      break;
+    }
+
+    case 'low':
+    default: {
+      // Integrated Intel HD/UHD, budget phones
+      // Direct render 1-pass only, low DPR, zero/light shadows
+      if (effectiveTier === 'low') {
+        pr = Math.min(dpr, 0.55); shadow = 0; directRender = true; particles = 0.4; paintAtlas = 1024;
+      } else if (effectiveTier === 'medium') {
+        pr = Math.min(dpr, 0.65); shadow = isMobile ? 0 : 512; directRender = true; particles = 0.5; paintAtlas = 1024;
+      } else if (effectiveTier === 'high') {
+        pr = Math.min(dpr, 0.75); shadow = 512; directRender = true; particles = 0.6; paintAtlas = 1024;
+      } else {
+        // ultra
+        pr = Math.min(dpr, 0.85); shadow = 512; directRender = true; particles = 0.7; paintAtlas = 1024;
+      }
+      break;
+    }
   }
 
   return {
-    ...q,
-    pixelRatio: pr,
+    pixelRatio: +pr.toFixed(2),
     shadowSize: shadow,
-    msaa,
-    smaa,
+    directRender,
     bloom,
     ao,
+    smaa,
+    msaa,
     paintAtlas,
-    directRender: tier === 'low' || tier === 'medium',
+    particles,
+    tier: effectiveTier,
+    hwTier: hw,
   };
 }
 
-// Quality presets consumed by the renderer + fx.
-export const QUALITY = {
-  // pixelRatio = cap on devicePixelRatio (Retina screens render at up to this density)
-  low:    { pixelRatio: 0.75, shadowSize: 512,  msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1024, particles: 0.4 },
-  medium: { pixelRatio: 1.0,  shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 2048, particles: 0.8 },
-  high:   { pixelRatio: 1.25, shadowSize: 2048, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
-  ultra:  { pixelRatio: 2.0,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
-  get auto() {
-    return QUALITY[getAutoQualityTier()] || QUALITY.medium;
-  },
-};
+// Device-relative QUALITY proxy ensuring full backward compatibility wherever QUALITY[tier] is read
+export const QUALITY = new Proxy({
+  low: { pixelRatio: 0.75, shadowSize: 512, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1024, particles: 0.5 },
+  medium: { pixelRatio: 1.0, shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 2048, particles: 0.8 },
+  high: { pixelRatio: 1.25, shadowSize: 1536, msaa: 0, bloom: true, ao: true, smaa: true, paintAtlas: 2048, particles: 1.0 },
+  ultra: { pixelRatio: 1.5, shadowSize: 2048, msaa: 2, bloom: true, ao: true, smaa: true, paintAtlas: 4096, particles: 1.0 },
+}, {
+  get(target, prop) {
+    if (prop === 'auto') {
+      return rendererQuality({ quality: 'auto' }, false);
+    }
+    if (typeof prop === 'string' && ['low', 'medium', 'high', 'ultra'].includes(prop)) {
+      return rendererQuality({ quality: prop }, false);
+    }
+    return target[prop] || rendererQuality({ quality: 'medium' }, false);
+  }
+});

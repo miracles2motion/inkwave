@@ -98,6 +98,19 @@ export function getDeviceProfile() {
     }
   }
 
+  // Calculate hardware capability tier ('enthusiast' | 'high' | 'medium' | 'low')
+  const hasBattery = typeof navigator !== 'undefined' && ('getBattery' in navigator || 'battery' in navigator);
+  let hwTier = 'medium';
+  if (isUltraGpu && !hasBattery && !isMobile && ram >= 16 && cores >= 8) {
+    hwTier = 'enthusiast';
+  } else if (isUltraGpu || (isHighGpu && !isLowGpu && (ram >= 6 || cores >= 6))) {
+    hwTier = 'high';
+  } else if (isMedGpu && !isLowGpu) {
+    hwTier = 'medium';
+  } else {
+    hwTier = 'low';
+  }
+
   // Clamping high-DPI screens on modest hardware to avoid fillrate bottlenecks
   if (dpr > 2.0 && baselineFactor < 0.9) {
     baselineFactor = Math.max(0.55, baselineFactor * 0.9);
@@ -106,6 +119,8 @@ export function getDeviceProfile() {
   _cachedProfile = {
     gpu: gpuRenderer || 'Default WebGL',
     tier,
+    hwTier,
+    hasBattery: !!hasBattery,
     baselineFactor: +baselineFactor.toFixed(2),
     isMobile,
     cores,
@@ -121,6 +136,13 @@ export function getDeviceProfile() {
  */
 export function getAutoQualityTier() {
   return getDeviceProfile().tier;
+}
+
+/**
+ * Get the underlying hardware classification tier ('enthusiast' | 'high' | 'medium' | 'low').
+ */
+export function getHardwareTier() {
+  return getDeviceProfile().hwTier;
 }
 
 /**

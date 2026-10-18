@@ -302,7 +302,7 @@ export class Renderer {
     }
     // Direct render fast-path: render straight to the default framebuffer when on low / mobile without extra post passes
     const isMobile = this.touch || isMobileOrTouch();
-    if (this.useDirectRender && (!this.extraPass || !this.extraPass.enabled || isMobile)) {
+    if (this.useDirectRender && (!this.extraPass || !this.extraPass.enabled || isMobile || this.q?.directRender)) {
       this.renderer.setRenderTarget(null);
       this.renderer.render(this.scene, this.camera);
       this._updateDirectFx();
