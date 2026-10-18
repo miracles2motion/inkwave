@@ -1237,9 +1237,12 @@ class Game {
   // even on 120 Hz displays. settings.fpsCap (0 = display rate) skips vsyncs so frames land on a steady cadence.
   _loop(ts) {
     requestAnimationFrame((t) => this._loop(t));
+    if (document.hidden) return; // Thermal saver: sleep completely when tab is hidden/minimized
     this._trackVsync(ts);
     const cap = this.settings.fpsCap || 0;
-    if (cap && ts !== undefined && this._lastTs !== undefined && ts - this._lastTs < 1000 / cap - 2) return;
+    const isMenu = G.mode === 'menu' || !!this.menus?.current || (this.match && this.match.paused);
+    const effectiveCap = isMenu ? (cap ? Math.min(cap, 60) : 60) : cap;
+    if (effectiveCap && ts !== undefined && this._lastTs !== undefined && ts - this._lastTs < 1000 / effectiveCap - 2) return;
     this._lastTs = ts;
     this.timer.update(ts); let dt = Math.max(0, this.timer.getDelta());
     if (this.frozen || this._building) return;
@@ -1366,8 +1369,9 @@ class Game {
     // only the low preset halves it
     const sm = G.renderer.shadowMap;
     sm.autoUpdate = false;
-    this._frameN = (this._frameN || 0) + 1;
-    if (this.settings.quality !== 'low' || (this._frameN & 1)) sm.needsUpdate = true;
+    const inMenu = G.mode === 'menu' || !!(m && m.attract);
+    if (!inMenu && this.settings.quality !== 'low') sm.needsUpdate = true;
+    else if (inMenu ? (this._frameN % 3 === 0) : (this._frameN & 1)) sm.needsUpdate = true;
     if (!this._skipRender) {
       if (!setUp) this.R.render();
       if (this.showcase.mode) sm.needsUpdate = true;

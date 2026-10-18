@@ -182,7 +182,7 @@ const SETTINGS_TABS = [
     { key: 'shadows', label: 'Shadows', type: 'toggle', help: 'Soft sun shadows. Turn off for extra speed on older machines.' },
     { key: 'bloom', label: 'Bloom glow', type: 'toggle', help: 'A soft glow around bright ink and specials.' },
     { key: 'showFps', label: 'Show FPS counter', type: 'toggle', help: 'Displays frames per second in the corner during matches.' },
-    { key: 'fpsCap', label: 'Frame rate limit', type: 'seg', options: [[0, 'Max'], [60, '60'], [30, '30']], help: 'Max follows your display (up to 120 Hz on ProMotion Macs). A 60 cap gives steadier pacing and longer battery life.' },
+    { key: 'fpsCap', label: 'Frame rate limit', type: 'seg', options: [[60, '60'], [0, 'Max'], [30, '30']], help: '60 is recommended to keep your device cool with smooth pacing. Max unlocks high-refresh displays (120+ Hz).' },
     // desktop app only (the Electron preload provides window.inkwaveNative)
     ...(typeof window !== 'undefined' && window.inkwaveNative ? [{ key: 'fullscreen', label: 'Fullscreen', type: 'toggle', help: 'Fill the whole display. Also ⌃⌘F or F11.' }] : []),
   ] },

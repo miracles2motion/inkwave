@@ -596,7 +596,7 @@ export const DEFAULT_SETTINGS = {
   bloom: true,
   cameraShake: 1.0,         // 0..1
   showFps: false,
-  fpsCap: 0,                // frame rate limit: 0 = match the display (120 on ProMotion Macs), else 60 / 30
+  fpsCap: 60,                // frame rate limit: 60 for cool & steady play, 0 = match high-refresh display (120/144), 30 = battery saver
   master: 0.8, music: 0.6, sfx: 0.85,
   colorblind: false,
   minimap: true,
@@ -684,7 +684,7 @@ export const QUALITY = {
   // pixelRatio = cap on devicePixelRatio (Retina screens render at up to this density)
   low:    { pixelRatio: 0.75, shadowSize: 512,  msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1024, particles: 0.4 },
   medium: { pixelRatio: 1.0,  shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1536, particles: 0.7 },
-  high:   { pixelRatio: 1.5,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
+  high:   { pixelRatio: 1.25, shadowSize: 2048, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
   ultra:  { pixelRatio: 2.0,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
   get auto() {
     return QUALITY[getAutoQualityTier()] || QUALITY.medium;

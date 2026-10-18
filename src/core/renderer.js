@@ -144,8 +144,12 @@ export class Renderer {
       // contact AO: a metre-scale radius so crates, planters and pillar feet sit on the deck (it multiplies the lit
       // frame, so it stays short-range — no dirty halos on sunlit walls)
       ao.updateGtaoMaterial({ radius: 1.1, distanceExponent: 1.6, thickness: 1.0, scale: 1.5, samples: 12, distanceFallOff: 1.0 });
-      ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
-      if (this.appleGPU) { const set = ao.setSize.bind(ao); ao.setSize = (sw, sh) => set(Math.ceil(sw / 2), Math.ceil(sh / 2)); }
+      // Half-resolution AO with bilateral filter: delivers smooth soft ambient contact shadows
+      // while cutting 75% of GPU raymarching overhead to keep devices cool.
+      if (this.appleGPU || this.settings?.quality !== 'ultra') {
+        const set = ao.setSize.bind(ao);
+        ao.setSize = (sw, sh) => set(Math.ceil(sw / 2), Math.ceil(sh / 2));
+      }
       comp.addPass(ao);
     }
     this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), ...BLOOM);
