@@ -6,9 +6,15 @@
 
 /* The layer is always present once touch mode is on; the controls inside it are gated on the match being live. */
 .iw-touch {
+  position: absolute;
+  inset: 0;
   z-index: 15;                 /* over the HUD (10), under the menu layer (20) and the overlays (30) */
   pointer-events: none;        /* every listener lives on window with geometric hit-testing */
   -webkit-touch-callout: none;
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
 }
 
 /* ---- buttons ---- */
@@ -29,7 +35,12 @@
 }
 .iw-touch.is-live .iw-touch__btn { opacity: 1; visibility: visible; transition: background .1s, border-color .1s, scale .07s var(--out), opacity .16s var(--out), visibility 0s; }
 .iw-touch__btn.is-down { background: rgba(255, 255, 255, .30); border-color: rgba(255, 255, 255, .8); scale: .92; }
-.iw-touch__btn.is-on { background: rgba(255, 138, 20, .55); border-color: var(--a, #ff8a14); color: var(--a-ink, #15121c); }
+.iw-touch__btn.is-on {
+  background: rgba(255, 138, 20, .75);
+  border-color: #ffffff;
+  color: var(--a-ink, #15121c);
+  box-shadow: 0 0 16px rgba(255, 138, 20, 0.65);
+}
 
 /* the fire button doubles as a look origin, so it is the one control that reads as a target rather than a label */
 .iw-touch__btn.is-fire { background: rgba(255, 138, 20, .40); border-color: rgba(255, 255, 255, .55); border-width: 3px; }
@@ -89,3 +100,81 @@
   65%, 100% { rotate: 90deg; }
 }
 @media (prefers-reduced-motion: reduce) { .iw-touch-rotate i { animation: none; rotate: 90deg; } }
+
+/* ---- Rotate Device to Landscape Overlay (Phase 1) ---- */
+.iw-rotate-overlay {
+  display: none;
+}
+
+@media (orientation: portrait) {
+  html.is-mobile-touch .iw-rotate-overlay,
+  body.is-mobile-touch .iw-rotate-overlay,
+  .is-mobile-touch #rotate-device-overlay,
+  #rotate-device-overlay.is-visible {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(13, 16, 32, 0.96);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 24px;
+    box-sizing: border-box;
+    pointer-events: all;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    text-align: center;
+  }
+}
+
+.iw-rotate-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  max-width: 340px;
+}
+
+.iw-rotate-overlay__icon {
+  width: 72px;
+  height: 72px;
+  color: #ff8a14;
+  animation: iw-rotate-anim 2s ease-in-out infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iw-rotate-overlay__icon svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 4px 16px rgba(255, 138, 20, 0.4));
+}
+
+.iw-rotate-overlay__title {
+  font: 900 clamp(20px, 5.5vmin, 28px) / 1.15 'Rubik', system-ui, sans-serif;
+  color: #ffffff;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.iw-rotate-overlay__desc {
+  font: 500 clamp(13px, 3.5vmin, 16px) / 1.45 'Rubik', system-ui, sans-serif;
+  color: #c3bdd6;
+  margin: 0;
+}
+
+@keyframes iw-rotate-anim {
+  0%, 25% { transform: rotate(0deg); }
+  65%, 100% { transform: rotate(90deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iw-rotate-overlay__icon { animation: none; transform: rotate(90deg); }
+}
+

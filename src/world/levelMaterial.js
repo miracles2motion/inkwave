@@ -736,6 +736,9 @@ ${INK_EMISSIVE}`)
     mat.side = THREE.DoubleSide;
     mat.defines = { ...(mat.defines || {}), GRATE: 1 };
   }
-  mat.customProgramCacheKey = () => 'inkwave-level-v6' + (opts.grate ? '-grate' : '');
+  if (opts.lowQuality) {
+    mat.defines = { ...(mat.defines || {}), INK_QUALITY_LOW: 1 };
+  }
+  mat.customProgramCacheKey = () => 'inkwave-level-v6' + (opts.grate ? '-grate' : '') + (mat.defines?.INK_QUALITY_LOW ? '-low' : '');
   return mat;
 }

@@ -18,6 +18,8 @@
 // Every builder works on any BaseAudioContext so tools/audio-test.mjs renders them through OfflineAudioContext.
 
 import { DEFAULT_SETTINGS } from '../config.js';
+import { G } from '../core/ctx.js';
+import { isMobileOrTouch } from '../core/touch.js';
 import {
   V, music as musicSingleton, makeImpulse, mulberry32, mtof, perc, ahr, adsr, pts, sweep, strokeWave, pulseWave,
   kick, snare, crash, tom, brass, bell, pad, bass,
@@ -260,22 +262,38 @@ export class AudioEngine {
     const d = this._def(name);
     if (!d) return null;
     o = o || {};
+
+    const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+
+    // Distance-cull non-player spatial audio on mobile / low quality if >24m away from listener
+    if (validPos(o.pos)) {
+      const dist = this._dist(o.pos);
+      if (isMobileOrLow && dist > 24) {
+        this.counts.dropped++;
+        return null;
+      }
+    }
+
     const now = this.ctx.currentTime;
     const t = Math.max(now, o.at ?? now) + (o.delay || 0);
-    // same sound within a few ms (e.g. 8 droplets landing together) collapses into one
+    // Enforce cooldown interval: on mobile/low, clamp to at least 45ms for identical sounds to prevent GC spikes
+    const minGap = isMobileOrLow ? Math.max(d.minGap ?? 0.018, 0.045) : (d.minGap ?? 0.018);
     const lt = this.last.get(name);
-    if (lt !== undefined && t >= lt && t - lt < (d.minGap ?? 0.018)) { this.counts.dropped++; return null; }
+    if (lt !== undefined && t >= lt && t - lt < minGap) { this.counts.dropped++; return null; }
     const vol = Math.max(0, o.volume ?? 1) * (d.gain ?? 0.5);
     if (vol < 1e-4) return null;
     this.last.set(name, t);
-    // per-name voice limit (drop oldest) + global cap
+    // per-name voice limit (drop oldest) + global cap (tightened on mobile/low)
+    const maxPerName = isMobileOrLow ? Math.min(d.max ?? 6, 3) : (d.max ?? 6);
+    const maxGlobalVoices = isMobileOrLow ? 16 : MAX_VOICES;
+
     let list = this.byName.get(name);
     if (!list) this.byName.set(name, (list = []));
     for (let i = list.length - 1; i >= 0; i--) if (list[i].v.dead || list[i].stolen) list.splice(i, 1);
-    while (list.length >= (d.max ?? 6)) this._steal(list.shift(), now);
-    if (this.voices.length >= MAX_VOICES) {
+    while (list.length >= maxPerName) this._steal(list.shift(), now);
+    if (this.voices.length >= maxGlobalVoices) {
       for (let i = this.voices.length - 1; i >= 0; i--) if (this.voices[i].v.dead || this.voices[i].stolen) this.voices.splice(i, 1);
-      while (this.voices.length >= MAX_VOICES) this._steal(this.voices.shift(), now);
+      while (this.voices.length >= maxGlobalVoices) this._steal(this.voices.shift(), now);
     }
     const pitch = Math.max(0.05, o.pitch ?? 1) * (1 + (this.rng() * 2 - 1) * (d.jitter ?? 0.06));
     const voice = this._voice(d, t, o.pos, vol);
@@ -308,8 +326,15 @@ export class AudioEngine {
     const d = this._def(name);
     if (!d) return NOOP_HANDLE;
     o = o || {};
+
+    const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+    if (validPos(o.pos) && isMobileOrLow && this._dist(o.pos) > 26) {
+      return NOOP_HANDLE;
+    }
+
+    const maxLoops = isMobileOrLow ? 10 : MAX_LOOPS;
     for (const h of this.loops) if (!h.playing) this.loops.delete(h);
-    if (this.loops.size >= MAX_LOOPS) this.loops.values().next().value.stop(0.05);
+    if (this.loops.size >= maxLoops) this.loops.values().next().value.stop(0.05);
     const t = this.ctx.currentTime;
     const gain = d.gain ?? 0.5;
     const voice = this._voice(d, t, o.pos, Math.max(0, +(o.volume ?? 1) || 0) * gain, true);

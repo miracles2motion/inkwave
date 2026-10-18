@@ -27,7 +27,8 @@ import {
 } from './character-mats.js';
 import * as MATS from './character-mats.js';
 import { getWeaponDef, getSubDef, FIST_OFFSET, GRIP_HOLE_L, WEAPON_KINDS, makeLampMaterial, makeCoilMaterial, animateWeapon } from './character-weapons.js';
-import { TIERS, T_HERO, T_GAME, T_FAR, LOD_QUALITY, KID_H, FADE_S, pickTier, ditherMaterial, farGeometry } from './character-lod.js';
+import { isMobileOrTouch } from '../core/touch.js';
+import { TIERS, T_HERO, T_GAME, T_FAR, LOD_QUALITY, getLodQuality, KID_H, FADE_S, pickTier, ditherMaterial, farGeometry } from './character-lod.js';
 
 // ------------------------------------------------------------------------------------------------
 // Style tables
@@ -1009,14 +1010,16 @@ export class Character {
       if (L.q !== undefined) { for (const X of this.lodSets) if (X) for (const m of X.list) this.kid.remove(m); this.lodSets = [null, null, null]; this._setTier(L.tier); }
       L.q = q;
     }
+    const noFade = G.settings?.quality === 'low' || isMobileOrTouch();
     if (L.to >= 0) {
+      if (noFade) { this._setTier(L.to); return; }
       L.f = Math.min(1, L.f + dt / FADE_S);
       L.fadeOut.value.x = L.fadeIn.value.x = Math.max(1e-4, L.f);
       if (L.f >= 0.5 && !L.props) { L.props = true; this._tierProps(L.to); }
       if (L.f >= 1) this._setTier(L.to);
       return;
     }
-    const Q = LOD_QUALITY[G.settings?.quality] || LOD_QUALITY.high;
+    const Q = getLodQuality ? getLodQuality(G.settings?.quality) : (LOD_QUALITY[G.settings?.quality] || LOD_QUALITY.high);
     let want;
     const px = L.px = this._screenPx();
     if (L.force >= 0) want = L.force;
@@ -1025,7 +1028,7 @@ export class Character {
     else want = pickTier(px, L.tier, Q, this.isLocal ? Q.heroLocal : Q.hero);
     if (want === L.tier) return;
     // not drawn yet, hidden, or out of a match: switch at once (nothing to pop); on screen: cross-fade
-    if (!this._rendered || !this.visible || !this.inWorld || dt <= 0 || L.force >= 0) { this._setTier(want); return; }
+    if (!this._rendered || !this.visible || !this.inWorld || dt <= 0 || L.force >= 0 || noFade) { this._setTier(want); return; }
     this._startFade(want);
   }
 
@@ -1315,7 +1318,7 @@ export class Character {
   // ---------------------------------------------------------------------------------------------
   // Update
   // ---------------------------------------------------------------------------------------------
-  update(dt, s) {
+  update(dt, s, skipPose = false) {
     dt = clamp(dt || 0, 0, 0.1);
     s = s || EMPTY_STATE;
     this._dt = dt;
@@ -1343,6 +1346,12 @@ export class Character {
     this._updateStates(dt, s);
     this._updateFormScales(dt);
 
+    if (skipPose) {
+      this._updateMaterials(dt, s);
+      this._updateLod(dt);
+      return;
+    }
+
     // an external head turn applied after our last update (the showcase lobby glance): yaw of (now · ours⁻¹)
     if (this._headSet && this.kidForm) {
       _q1.copy(this._headQW).invert().premultiply(this.bones.head.quaternion);
@@ -1350,9 +1359,14 @@ export class Character {
       this.extGl = Math.abs(g) < 1.5 ? g : 0;
     } else this.extGl = 0;
     // life detail: 2 full · 1 small on screen (game tier < 150 px: no idle face flickers / grip re-grips) · 0 far tier
-    // (no face, fingers, jiggle, breathing; hair at half rate) — none of it is readable at that size
+    // (no face, fingers, jiggle, breathing; hair at half rate) — on mobile/low, bots/non-hero tiers skip fingers/face/jiggle
     const L = this.lod, lt = L.to >= 0 ? Math.min(L.tier, L.to) : L.tier;
-    this.lifeLv = !this.inWorld || lt === T_HERO ? 2 : lt === T_FAR ? 0 : L.px > 0 && L.px < 150 ? 1 : 2;
+    const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+    if (!this.isLocal && isMobileOrLow) {
+      this.lifeLv = lt === T_HERO ? 1 : 0;
+    } else {
+      this.lifeLv = !this.inWorld || lt === T_HERO ? 2 : lt === T_FAR ? 0 : L.px > 0 && L.px < 150 ? 1 : 2;
+    }
     // hidden (not drawn): keep the clocks and states, skip the pose; the feet re-plant and the hair re-inits on return
     const shown = this.root.visible && (!this.root.parent || this.root.parent.visible !== false);
     if (this.kidScale > 0.001 && shown) {
@@ -3522,10 +3536,13 @@ export class Character {
     }
 
     const lv = this.lifeLv;
+    const L = this.lod, lt = L.to >= 0 ? Math.min(L.tier, L.to) : L.tier;
     // ---- face
     if (lv > 0) this._applyFace(P, dt);
-    // ---- hair secondary motion (far: every other frame on the summed step; the chain sub-steps at ≤ 1/60 s)
-    if (lv > 0 || !(this._hairOdd = !this._hairOdd)) { this._updateHair(dt + this._hairAcc); this._hairAcc = 0; } else this._hairAcc += dt;
+    // ---- hair secondary motion (far: skip hair physics in far tier; chain sub-steps at ≤ 1/60 s)
+    if (lt === T_FAR) { this._hairAcc = 0; }
+    else if (lv > 0 || !(this._hairOdd = !this._hairOdd)) { this._updateHair(dt + this._hairAcc); this._hairAcc = 0; }
+    else this._hairAcc += dt;
     // ---- tank slosh (ink level wobble + surface tilt within the glass)
     this._updateTank(dt);
     // ---- fork weapon extras (the arsenal kinds' drums / barrels are turned by animateWeapon)

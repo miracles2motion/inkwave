@@ -51,6 +51,9 @@ uniform float uInkClock;
 uniform vec4 uRip[${INK_RIPPLES}];
 uniform vec4 uRipP[${INK_RIPPLES}];
 float gInkKeep = 0.0;      // share of the surface relief that still shows through thin (wall) ink
+#ifdef INK_QUALITY_LOW
+vec4 paintAt(vec2 uv) { return texture2D(uPaint, uv); }
+#else
 // Paint lookups use textureGrad with gradients clamped to ≤ 8 texels: trilinear + anisotropic filtering (no shimmer at
 // distance) while never reaching mip levels coarse enough to bleed across the 8-texel face padding.
 vec2 gPdx = vec2(0.0), gPdy = vec2(0.0);
@@ -80,6 +83,7 @@ vec4 paintCubic(vec2 uv, out vec4 gX, out vec4 gY) {
      + dgy.y * (gx.x * inkTap(i + vec2(ox.x, doy.y)) + gx.y * inkTap(i + vec2(ox.y, doy.y)));
   return v;
 }
+#endif
 // Unnormalised Mikkelsen bump: dHdxy is the per-pixel change of a height in metres, so the tilt equals the true
 // slope of the ink surface regardless of distance/viewing angle.
 vec3 perturbInk(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection) {
@@ -97,6 +101,35 @@ vec3 perturbInk(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection) 
 // Inside levelMaterial's color_fragment block, after the surface (base, rough) is built; writes gInk* and mixes base.
 export const INK_COLOR = /* glsl */`
   if (vFaceData.y > 0.5) {
+#ifdef INK_QUALITY_LOW
+    vec4 pnt = paintAt(vPaintUv);
+    float amt = pnt.a;
+    float fw = max(fwidth(amt), 0.01);
+    float w = clamp(fw * 0.8, 0.008, 0.25);
+    gInk = smoothstep(0.5 - w, 0.5 + w, amt);
+    float ia = 1.0 / max(amt, 0.02);
+    float tRaw = clamp(pnt.r * ia, 0.0, 1.0);
+    float tm = smoothstep(0.48, 0.52, tRaw);
+    float fresh = clamp(pnt.g * ia, 0.0, 1.0);
+    gFresh = fresh * gInk;
+    float tone = clamp(pnt.b * ia, 0.0, 1.0);
+    bool wallF = abs(vWNorm.y) < 0.5;
+    float s = clamp((amt - 0.5) * 1.7, 0.0, 1.0);
+    float hs = 1.0 - (1.0 - s) * (1.0 - s);
+    gInkS = hs;
+    gInkNear = 0.5;
+    // Fast screen-space derivative for ink edge normal bevel
+    vec2 dUv = vec2(dFdx(amt), dFdy(amt));
+    vec2 pUvX = dFdx(vPaintUv), pUvY = dFdy(vPaintUv);
+    float pScale = max(length(pUvX), length(pUvY));
+    vec2 gradA = (pScale > 1e-5) ? (dUv / (pScale * uAtlasSize)) : vec2(0.0);
+    gInkD = clamp(gradA * 1.5, vec2(-0.8), vec2(0.8)) * gInk;
+    vec3 team = mix(uTeamA, uTeamB, tm);
+    vec3 inkCol = team * (0.93 + 0.13 * tone);
+    inkCol *= 1.0 + 0.07 * fresh;
+    gInkCol = inkCol;
+    base = mix(base, gInkCol, gInk);
+#else
     vec2 pdx = dFdx(vPaintUv), pdy = dFdy(vPaintUv);
     float texFoot = max(length(pdx), length(pdy)) / uTexel;
     float gk = min(1.0, 8.0 / max(texFoot, 1e-4));
@@ -183,6 +216,7 @@ export const INK_COLOR = /* glsl */`
       base *= mix(vec3(1.0), team * 0.35 + 0.5, halo * 0.55);
     }
     base = mix(base, gInkCol, gInk);
+#endif
   }`;
 
 // roughness of the pigment layer under the coat
@@ -192,6 +226,7 @@ roughnessFactor = mix(gBaseRough, mix(0.26, 0.14, gFresh), gInk);`;
 // ---------------------------------------------------------------------------------------------------- normal
 // Inside levelMaterial's normal block before the face frame is built: adds the gel micro-surface to \`slope\`.
 export const INK_GEL = /* glsl */`
+#ifndef INK_QUALITY_LOW
   if (gInk > 0.01) {
     // gel micro-surface: soft swells so reflections break into wet highlights. Mip-filtered (fades to flat by itself
     // at distance). Walls stretch it vertically. Fresh ink is smoother (surface tension) and sways very gently while it
@@ -215,10 +250,12 @@ export const INK_GEL = /* glsl */`
       slope += vec2(hx, hy) / (2.0 * e) * 0.035 * gf * gInk;
     }
 #endif
-  }`;
+  }
+#endif`;
 
 // After the swim wakes (T, Bt = the face's world tangent frame): expanding ripples in the ink surface.
 export const INK_SLOPE = /* glsl */`
+#ifndef INK_QUALITY_LOW
   if (gInk > 0.01) {
     // ripples: a wave packet runs out from every impact / footstep / dive, thinning as it spreads; the crests catch
     // the light (glossier). Height field → analytic gradient in the face plane.
@@ -250,7 +287,8 @@ export const INK_SLOPE = /* glsl */`
     float rFar = 1.0 - smoothstep(0.05, 0.18, length(fwidth(vWPos)));
     slope += vec2(dot(rS, T), dot(rS, Bt)) * gInk * rFar;
     gWake = max(gWake, clamp(rG * 0.5, 0.0, 1.0) * gInk * rFar);
-  }`;
+  }
+#endif`;
 
 // ---------------------------------------------------------------------------------------------------- lighting
 // a little self-light keeps ink loud in shadow and at dusk (subsurface-ish glow, stronger in the thick body)
@@ -260,6 +298,13 @@ totalEmissiveRadiance += gInkCol * gInk * uInkGlow * (0.75 + 0.35 * gInkS);`;
 // after lights_physical_fragment: the wet coat
 export const INK_LIGHTS = /* glsl */`
 {
+#ifdef INK_QUALITY_LOW
+  material.clearcoat = gInk;
+  material.clearcoatRoughness = mix(0.12, 0.04, gFresh);
+  material.roughness = mix(material.roughness, 0.18, gInk);
+  material.specularColor *= 1.0 - 0.7 * gInk;
+  material.clearcoatF0 = vec3(0.04 + 0.02 * gFresh);
+#else
   // glossy wet coat on ink (sharp while fresh, satin once dry); roughness widened where the ink normal varies faster
   // than the pixel grid (no sparkle)
   vec3 cdu = dFdx(normal), cdv = dFdy(normal);
@@ -276,6 +321,7 @@ export const INK_LIGHTS = /* glsl */`
   // survives a low gameplay camera instead of washing out to sky-white
   material.clearcoatF0 = vec3(mix(0.04, 0.055 + 0.015 * gFresh, gInk));
   material.clearcoatF90 = mix(1.0, 0.3, gInk);
+#endif
 }`;
 
 // after lights_fragment_maps: ambient / reflection treatment

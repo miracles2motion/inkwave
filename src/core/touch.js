@@ -46,10 +46,70 @@ const EDGE_CODES = { cheer: 'KeyC' };
 // to hold a map button while dragging) and `pause` is a one-shot action. Every other button is hold-to-use.
 const NOT_LEVEL = new Set(['map', 'pause']);
 
-// Is the PRIMARY pointer a finger? A touchscreen laptop reports maxTouchPoints > 0 but `pointer: fine`, and it wants
-// the mouse path — only a device whose main input is a thumb gets on-screen controls.
+let _dynamicTouchDetected = false;
+let _mobileTouchDetected = false;
+const _mobileModeCallbacks = new Set();
+
+export function onMobileModeSwitch(fn) {
+  _mobileModeCallbacks.add(fn);
+  if (_dynamicTouchDetected || _mobileTouchDetected) {
+    try { fn(); } catch (e) { console.warn('[inkwave] mobile switch callback error', e); }
+  }
+  return () => _mobileModeCallbacks.delete(fn);
+}
+
+export function syncRotateOverlay() {
+  if (typeof window === 'undefined') return;
+  const isMobile = isMobileOrTouch();
+  if (typeof document !== 'undefined') {
+    document.documentElement.classList.toggle('is-mobile-touch', isMobile);
+  }
+  const isPortrait = window.innerHeight > window.innerWidth;
+  const overlay = document.getElementById('rotate-device-overlay');
+  if (overlay) {
+    const show = isMobile && isPortrait;
+    overlay.classList.toggle('is-visible', show);
+    overlay.setAttribute('aria-hidden', show ? 'false' : 'true');
+  }
+}
+
+export function enableMobileMode() {
+  if (_dynamicTouchDetected) return;
+  _dynamicTouchDetected = true;
+  _mobileTouchDetected = true;
+  if (typeof document !== 'undefined') {
+    document.documentElement.classList.add('is-mobile-touch');
+  }
+  syncRotateOverlay();
+  for (const fn of _mobileModeCallbacks) {
+    try { fn(); } catch (e) { console.warn('[inkwave] mobile switch callback error', e); }
+  }
+}
+
+// Reliable mobile/touch detection utility checking touch points, coarse pointer, mobile UA, and viewport width
+export function isMobileOrTouch() {
+  if (_dynamicTouchDetected || _mobileTouchDetected) return true;
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+
+  const hasTouchPoints = (navigator.maxTouchPoints || 0) > 0;
+  const isCoarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+  const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Tablet/i.test(ua)
+    || Boolean(navigator?.userAgentData?.mobile);
+  const isMobileViewport = typeof window.innerWidth === 'number' && (
+    Math.min(window.innerWidth, window.innerHeight) <= 1024 || window.innerWidth <= 1024
+  );
+
+  return Boolean(
+    _dynamicTouchDetected ||
+    _mobileTouchDetected ||
+    isMobileUA ||
+    ((hasTouchPoints || isCoarse) && (isMobileViewport || isCoarse))
+  );
+}
+
 export function isTouchDevice() {
-  return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches && (navigator.maxTouchPoints || 0) > 0;
+  return isMobileOrTouch();
 }
 
 // settings.touchControls: 'on' | 'off' force it, 'auto' decides by device.
@@ -57,19 +117,40 @@ export function shouldUseTouch(settings) {
   const mode = settings?.touchControls ?? 'auto';
   if (mode === 'on') return true;
   if (mode === 'off') return false;
-  return isTouchDevice();
+  return isMobileOrTouch();
+}
+
+// Dynamic listener on the first touchstart event on window to switch into mobile mode immediately
+if (typeof window !== 'undefined') {
+  const onFirstTouch = () => {
+    _dynamicTouchDetected = true;
+    enableMobileMode();
+    window.removeEventListener('touchstart', onFirstTouch, true);
+  };
+  window.addEventListener('touchstart', onFirstTouch, { capture: true, passive: true });
+  window.addEventListener('resize', syncRotateOverlay, { passive: true });
+  window.addEventListener('orientationchange', syncRotateOverlay, { passive: true });
+
+  if (isMobileOrTouch()) {
+    enableMobileMode();
+  }
 }
 
 export class TouchControls {
   constructor(input) {
     this.input = input;
     this.roles = new Map();        // pointerId -> 'move' | 'look' | 'fire' | 'btn:<name>'
-    this.look = { id: null, x: 0, y: 0 };
+    this.pointerPositions = new Map(); // pointerId -> { x, y }
+    this.activeLookId = null;
     this.move = { id: null, ox: 0, oy: 0 };
     this.buttons = [];             // { name, el, ux, uy, ur, top, cx, cy, r }
     this.u = TOUCH.minStep;
     this.stickR = 1;
     this.enabled = false;          // the game layer is live (in a match, no menu open)
+    this.squidLatched = false;
+    this._squidDownT = 0;
+    this._squidDownPos = { x: 0, y: 0 };
+    this._squidDragged = false;
   }
 
   // ---- lifecycle -------------------------------------------------------------------------------------------------
@@ -141,15 +222,24 @@ export class TouchControls {
     // Portrait is gated (styles/touch.css draws a "turn your device" card over everything). The card is DOM, but input
     // here is geometric hit-testing on window, which no DOM element can block — so refuse it explicitly.
     this.portrait = h > w;
+    syncRotateOverlay();
     // Step unit: driven by the short edge so the cluster keeps its proportions in landscape. Floored at
     // TOUCH.minStep so targets stay thumb-sized rather than being scaled by the UI's --u, which collapses to under
     // half its design size on a phone.
     const u = (this.u = Math.max(TOUCH.minStep, Math.min(TOUCH.maxStep, Math.min(w, h) * TOUCH.stepFrac)));
     this.stickR = u * TOUCH.stickR;
     const m = Math.max(u * TOUCH.edgeSteps, TOUCH.edgeMin);   // absolute floor: the gesture-nav strip is fixed in dp, not in steps
+
+    // Safe-area insets: protect button cluster from hardware notches and bottom home indicators
+    const cs = this.el ? getComputedStyle(this.el) : null;
+    const sal = cs ? (parseFloat(cs.getPropertyValue('--sal')) || 0) : 0;
+    const sar = cs ? (parseFloat(cs.getPropertyValue('--sar')) || 0) : 0;
+    const sat = cs ? (parseFloat(cs.getPropertyValue('--sat')) || 0) : 0;
+    const sab = cs ? (parseFloat(cs.getPropertyValue('--sab')) || 0) : 0;
+
     for (const b of this.buttons) {
-      b.cx = w - m - b.ux * u;
-      b.cy = b.top ? m + b.uy * u : h - m - b.uy * u;
+      b.cx = w - sar - m - b.ux * u;
+      b.cy = b.top ? sat + m + b.uy * u : h - sab - m - b.uy * u;
       b.r = b.ur * u;
       b.el.style.width = b.el.style.height = `${(b.r * 2).toFixed(1)}px`;
       b.el.style.transform = `translate3d(${(b.cx - b.r).toFixed(1)}px,${(b.cy - b.r).toFixed(1)}px,0)`;
@@ -180,34 +270,77 @@ export class TouchControls {
       if (this._taken(role)) { e.preventDefault(); return; }   // a second finger on a live control is inert
       this.roles.set(e.pointerId, role);
       b.el.classList.add('is-down');
-      if (b.name === 'fire') { this.look.id = e.pointerId; this.look.x = e.clientX; this.look.y = e.clientY; }
+
+      // Both Fire and Squid buttons allow simultaneous camera aiming while held
+      if (b.name === 'fire' || b.name === 'squid') {
+        this.pointerPositions.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        this.activeLookId = e.pointerId;
+      }
+
+      if (b.name === 'squid') {
+        this._squidDownT = performance.now();
+        this._squidDownPos = { x: e.clientX, y: e.clientY };
+        this._squidDragged = false;
+      }
+
+      // Firing weapon naturally cancels latched swim mode
+      if (b.name === 'fire' && this.squidLatched) {
+        this.squidLatched = false;
+        this.input.touchUp('squid');
+        this._syncSquid();
+      }
+
       this._press(b.name);
       e.preventDefault();                                        // also suppresses the synthesized mouse events
       return;
     }
-    const inLeft = e.clientX < innerWidth * MOVE_ZONE && e.clientY > innerHeight * TOUCH.topGuard;
+
+    const cs = this.el ? getComputedStyle(this.el) : null;
+    const sal = cs ? (parseFloat(cs.getPropertyValue('--sal')) || 0) : 0;
+    const sar = cs ? (parseFloat(cs.getPropertyValue('--sar')) || 0) : 0;
+    const sat = cs ? (parseFloat(cs.getPropertyValue('--sat')) || 0) : 0;
+    const sab = cs ? (parseFloat(cs.getPropertyValue('--sab')) || 0) : 0;
+    const moveLeftBoundary = sal + (innerWidth - sal - sar) * MOVE_ZONE;
+    const inLeft = e.clientX >= sal && e.clientX < moveLeftBoundary && e.clientY > sat + (innerHeight - sat - sab) * TOUCH.topGuard;
+
     if (inLeft && this.move.id === null) {
       this.roles.set(e.pointerId, 'move');
       this.move.id = e.pointerId;
       this.move.ox = e.clientX; this.move.oy = e.clientY;
       this._showStick(e.clientX, e.clientY, e.clientX, e.clientY);
-    } else if (!inLeft && this.look.id === null) {
+    } else if (!inLeft) {
       this.roles.set(e.pointerId, 'look');
-      this.look.id = e.pointerId;
-      this.look.x = e.clientX; this.look.y = e.clientY;
-    } else { e.preventDefault(); return; }                       // an axis is already owned: this finger is inert
+      this.pointerPositions.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.activeLookId === null) this.activeLookId = e.pointerId;
+    } else {
+      e.preventDefault(); return;                                // an axis is already owned: this finger is inert
+    }
     e.preventDefault();
   }
 
   _move(e) {
     const role = this.roles.get(e.pointerId);
     if (role === undefined) return;
-    if (role === 'look' || role === 'fire') {
-      // Raw pixels into the field the camera and both map cursors read. The camera applies the touch gain itself
-      // (see player.js), which keeps the map cursors' existing screen-normalized feel intact.
-      this.input.mouse.dx += e.clientX - this.look.x;
-      this.input.mouse.dy += e.clientY - this.look.y;
-      this.look.x = e.clientX; this.look.y = e.clientY;
+    if (role === 'look' || role === 'fire' || role === 'btn:squid') {
+      const prev = this.pointerPositions.get(e.pointerId);
+      if (prev) {
+        const dx = e.clientX - prev.x;
+        const dy = e.clientY - prev.y;
+        prev.x = e.clientX;
+        prev.y = e.clientY;
+
+        if (role === 'btn:squid') {
+          if (Math.hypot(e.clientX - this._squidDownPos.x, e.clientY - this._squidDownPos.y) > 15) {
+            this._squidDragged = true;
+          }
+        }
+
+        // Camera receives delta smoothly without multi-finger coordinate crosstalk
+        if (this.activeLookId === e.pointerId) {
+          this.input.mouse.dx += dx;
+          this.input.mouse.dy += dy;
+        }
+      }
       return;
     }
     if (role === 'move') {
@@ -225,14 +358,47 @@ export class TouchControls {
     const role = this.roles.get(e.pointerId);
     if (role === undefined) return;
     this.roles.delete(e.pointerId);
+    this.pointerPositions.delete(e.pointerId);
+
+    if (this.activeLookId === e.pointerId) {
+      this.activeLookId = null;
+      // Transfer active camera look to another held finger if available
+      for (const [pid, r] of this.roles) {
+        if (r === 'look' || r === 'fire' || r === 'btn:squid') {
+          this.activeLookId = pid;
+          const pos = this.pointerPositions.get(pid);
+          if (pos) { pos.x = e.clientX; pos.y = e.clientY; }
+          break;
+        }
+      }
+    }
+
     if (role === 'move') {
       this.move.id = null;
       this.input.touch.mx = 0; this.input.touch.mz = 0;
       this._hideStick();
-    } else if (role === 'look' || role === 'fire') {
-      if (this.look.id === e.pointerId) this.look.id = null;
-      if (role === 'fire') this.input.touchUp('fire');           // pointercancel lands here too, and is a release
+    } else if (role === 'look') {
+      // Nothing else needed
+    } else if (role === 'fire') {
+      this.input.touchUp('fire');                                // pointercancel lands here too, and is a release
       for (const b of this.buttons) if (b.name === 'fire') b.el.classList.remove('is-down');
+    } else if (role === 'btn:squid') {
+      const elapsed = performance.now() - (this._squidDownT || 0);
+      const wasQuickTap = elapsed < 350 && !this._squidDragged;
+
+      if (this.squidLatched) {
+        // Tapping while latched turns latch off
+        this.squidLatched = false;
+        this.input.touchUp('squid');
+      } else if (wasQuickTap) {
+        // Quick tap without dragging latches swim mode ON
+        this.squidLatched = true;
+      } else {
+        // Long hold or dragged: release swim mode
+        this.input.touchUp('squid');
+      }
+      this._syncSquid();
+      for (const b of this.buttons) if (b.name === 'squid') b.el.classList.remove('is-down');
     } else if (role.startsWith('btn:')) {
       const name = role.slice(4);
       if (!NOT_LEVEL.has(name)) this.input.touchUp(name);   // a latch/one-shot is set on press and only press changes it
@@ -247,6 +413,7 @@ export class TouchControls {
     this.input.touch.fingers = this.roles.size;
     switch (name) {
       case 'fire': this.input.touchDown('fire'); break;
+      case 'squid': this.input.touchDown('squid'); break;
       case 'map': this.input.touchMapToggle(); this._syncMap(); break;
       case 'pause': this.input.onPause?.(); break;
       default:
@@ -260,15 +427,24 @@ export class TouchControls {
     for (const b of this.buttons) if (b.name === 'map') b.el.classList.toggle('is-on', !!this.input.touch.map);
   }
 
+  _syncSquid() {
+    for (const b of this.buttons) if (b.name === 'squid') b.el.classList.toggle('is-on', !!this.squidLatched);
+  }
+
   // Drop every gesture and every held control. Called whenever the layer is invalidated: menu opened, orientation
   // changed, match ended, app backgrounded.
   releaseAll() {
     for (const b of this.buttons) b.el.classList.remove('is-down');
     this.roles.clear();
-    this.move.id = null; this.look.id = null;
+    this.pointerPositions.clear();
+    this.activeLookId = null;
+    this.move.id = null;
     this.input.touch.mx = 0; this.input.touch.mz = 0;
     this.input.touch.fingers = 0;
     this.input.touch.fire = false;
+    this.squidLatched = false;
+    this.input.touchUp('squid');
+    this._syncSquid();
     this._hideStick();
   }
 
@@ -288,19 +464,19 @@ export class TouchControls {
   // Gate: a live match with no menu open. Deliberately NOT match.controller.enabled — that clears when the local
   // player is splatted, which is exactly when the map (and super-jump planning) must still work.
   update() {
-    const live = G.mode === 'match' && !!G.match && !G.menus?.current && !this.portrait;
+    const live = G.mode === 'match' && !!G.match && !G.match.attract && !G.menus?.current && !this.portrait;
     // Arm the portrait gate only when there is something unusable underneath it — a real menu screen or a match.
     // NOT the loading screen: that is where a player looks to see whether the game is coming up at all, and covering
     // it turns "still loading" into "broken" (which is exactly what an earlier version of this gate did). The title
     // screen is left alone too — it advances on a tap anywhere, which portrait does fine.
     const cur = G.menus?.current;
-    const armed = (G.mode === 'match' && !!G.match) || (!!cur && cur !== 'loading' && cur !== 'title');
+    const armed = (G.mode === 'match' && !!G.match && !G.match.attract) || (!!cur && cur !== 'loading' && cur !== 'title');
     // Guarded: this runs before the gate below, so an unguarded toggle here is a DOM write every frame of the match
     // whether or not anything changed. classList.toggle is cheap but it is not free, and it is not on the only path.
     if (armed !== this._armed) { this._armed = armed; this.rotateEl?.classList.toggle('is-armed', armed); }
     if (live === this.enabled) return;
     this.enabled = live;
-    this.el.classList.toggle('is-live', live);
+    this.el?.classList.toggle('is-live', live);
     this.releaseAll();
     if (!live) this.clearMap();     // otherwise the map latch survives and springs open on the next match
   }

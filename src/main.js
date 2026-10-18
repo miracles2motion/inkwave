@@ -3,9 +3,9 @@ import * as THREE from 'three';
 import { G, on, emit, clamp, damp } from './core/ctx.js';
 import { Renderer } from './core/renderer.js';
 import { Input } from './core/input.js';
-import { TouchControls, shouldUseTouch, isTouchDevice } from './core/touch.js';
+import { TouchControls, shouldUseTouch, isTouchDevice, isMobileOrTouch, onMobileModeSwitch } from './core/touch.js';
 import { mapTheme,
-  DEFAULT_SETTINGS, QUALITY, TEAM_PALETTES, COLORBLIND_PALETTE, TEAM_NAMES, WEAPONS, WEAPON_ORDER, WEAPON_SUCCESSOR, ZONES, SUB, SUBS, SUB_ORDER, SPECIALS, SPECIAL_ORDER,
+  DEFAULT_SETTINGS, QUALITY, rendererQuality, TEAM_PALETTES, COLORBLIND_PALETTE, TEAM_NAMES, WEAPONS, WEAPON_ORDER, WEAPON_SUCCESSOR, ZONES, SUB, SUBS, SUB_ORDER, SPECIALS, SPECIAL_ORDER,
   MAPS, DIFFICULTY, PLAYER, PROGRESSION, VERSION, MATCH, OFFLINE_MAPS, mapOfflineOk, mapNoBots, mapBossOk,
 } from './config.js';
 import { Level } from './world/level.js';
@@ -90,7 +90,8 @@ class Game {
     // `qualityChosen` is set only by the settings screen, so a value the player actually picked always wins; a
     // defaulted one does not. Testing the flag rather than "is quality present" also repairs devices that already
     // had the default persisted by an earlier run.
-    this.touchMode = shouldUseTouch(this.settings);
+    this.touchMode = isMobileOrTouch() || shouldUseTouch(this.settings);
+    onMobileModeSwitch(() => this.enableMobileMode());
     if (this.touchMode) {
       // Shadows cost a shadow-map render pass and, more importantly, a shadow variant of every material's program —
       // exactly the extra shader count that hurts on a phone. Off by default there; the settings screen can turn them
@@ -211,7 +212,7 @@ class Game {
     }
     // after a focus steal while the map was held, the next click on the game takes the mouse back (no pause detour)
     this.R.renderer.domElement.addEventListener('mousedown', () => {
-      if (this._relock && G.mode === 'match' && this.match && !this.match.paused && !this.menus?.current) { this._relock = false; this.input.requestLock(); }
+      if (!this.touchMode && !isMobileOrTouch() && this._relock && G.mode === 'match' && this.match && !this.match.paused && !this.menus?.current) { this._relock = false; this.input.requestLock(); }
     });
 
     // modules built by other authors
@@ -341,6 +342,35 @@ class Game {
     };
   }
 
+  enableMobileMode() {
+    this.touchMode = true;
+    let storedRaw = null;
+    try { storedRaw = JSON.parse(localStorage.getItem('inkwave.settings')); } catch { /* private mode */ }
+    let changed = false;
+    if (storedRaw?.qualityChosen !== true && this.settings.quality !== 'low') {
+      this.settings.quality = 'low';
+      changed = true;
+    }
+    if (storedRaw?.shadowsChosen !== true && this.settings.shadows !== false) {
+      this.settings.shadows = false;
+      changed = true;
+    }
+    if (changed) saveJSON('inkwave.settings', this.settings);
+
+    this.input?.exitLock?.();
+    this.input?.setTouchMode?.(true);
+    if (!this.touch && this.input && this.uiRoot) {
+      this.touch = G.touch = new TouchControls(this.input);
+      this.touch.mount(this.uiRoot);
+      this.input.onPause = () => this.pause();
+    }
+    if (this.R) {
+      this.R.touch = true;
+      this.R.applySettings(this.settings);
+    }
+    this.touch?.update();
+  }
+
   // Build (or rebuild) everything that depends on the stage layout: level, collision, paint atlas, surface material,
   // decor, navigation graph and minimap. Environment/FX/projectiles persist across stages.
   // mode: 'turf' | 'zones' — a stage with Zone Control-only pieces (variants.js) builds a separate world for that mode
@@ -362,7 +392,8 @@ class Game {
     G.paint?.dispose();
     this.layoutId = layoutId; this.worldKey = worldKey;
     this.mapDef = map;
-    const q = QUALITY[this.settings.quality] || QUALITY.high;
+    const rq = rendererQuality(this.settings, this.touchMode);
+    const isLowQuality = this.settings.quality === 'low' || (this.touchMode && this.settings.quality !== 'ultra');
     // set dressing first: solid props hand back collision boxes that become part of the level (physics, nav, paint)
     const colliders = [];
     if (this.PropKit) {
@@ -379,16 +410,21 @@ class Game {
     const level = (G.level = new Level(layoutFor(MAP_LAYOUTS[layoutId], mode), colliders));
     G.physics = new Physics(level);
     const lightmap = await this._loadLightmap(level, worldKey);
-    G.paint = new PaintSystem(G.renderer, level, { atlasSize: Math.max(512, Math.round(q.paintAtlas * this.memK)), maxDensity: q.paintAtlas >= 4096 ? 30 : 18 });
+    const atlasSize = Math.max(512, Math.round(rq.paintAtlas * this.memK));
+    G.paint = new PaintSystem(G.renderer, level, {
+      atlasSize,
+      maxDensity: rq.paintAtlas >= 4096 ? 30 : 18,
+      lowQuality: isLowQuality,
+    });
     this.murals.userData.setStage?.(layoutId);   // stage decals (murals.js) before the material reads the table
-    this.levelMat = createLevelMaterial(G.paint.texture, G.paint.size, this.murals, { lightmap, texlib: this.texlib });
+    this.levelMat = createLevelMaterial(G.paint.texture, G.paint.size, this.murals, { lightmap, texlib: this.texlib, lowQuality: isLowQuality });
     (this.swimWake || (this.swimWake = new SwimWake())).reset();
     this.levelMesh = new THREE.Mesh(level.buildGeometry(G.paint.size), this.levelMat);
     this.levelMesh.castShadow = true; this.levelMesh.receiveShadow = true;
     this.levelMesh.name = 'level';
     scene.add(this.levelMesh);
     // grates: same surface shader, cut-out holes, no ink (they cast no shadow; the mesh is too fine for the shadow map)
-    this.grateMat = createLevelMaterial(G.paint.texture, G.paint.size, this.murals, { grate: true, lightmap, texlib: this.texlib });
+    this.grateMat = createLevelMaterial(G.paint.texture, G.paint.size, this.murals, { grate: true, lightmap, texlib: this.texlib, lowQuality: isLowQuality });
     const gg = level.buildGeometry(G.paint.size, (b) => b.grate);
     this.grateMesh = new THREE.Mesh(gg, this.grateMat);
     this.grateMesh.receiveShadow = true; this.grateMesh.visible = gg.index.count > 0;
@@ -585,6 +621,7 @@ class Game {
   _onPointerUnlock() {
     // only a live round pauses on focus loss; intro / time's up / judge / results release the mouse on purpose.
     // Holding the map is never a reason to pause (some browsers/embeds steal focus on TAB): relock on the next click.
+    if (this.touchMode || this.input?.touch?.active || isMobileOrTouch()) return;
     if (this.match?.controller?.mapHeld || (this.rig?.mapK ?? 0) > 0) { this._relock = true; return; }
     if (G.mode === 'match' && this.match && !this.match.paused && this.match.state === 'playing' && !this.menus?.current) this.pause();
   }
@@ -808,8 +845,9 @@ class Game {
     if (!practice) this.lastMatchOpts = opts;
     G.audio?.init?.();
     G.audio?.duck?.(1, 0.01);   // a new stage picked from the practice pause menu starts un-ducked
-    this.input.requestLock();
+    if (!this.touchMode && !isMobileOrTouch()) this.input.requestLock();
     this.menus?.show(null);
+    this.touch?.update();
     await this._fade(1, 350);
     G.music?.stop?.(0.3); this._musicTrack = null;
     // start buffering this round's match song and the final-minute song while the world loads
@@ -957,7 +995,8 @@ class Game {
   netMatchGo() {
     const m = this.match;
     if (!m || m.state !== 'init') return;
-    this.input.requestLock();
+    if (!this.touchMode && !isMobileOrTouch()) this.input.requestLock();
+    this.touch?.update();
     m.start();
   }
   // results done → everyone back in the room's lobby
@@ -1027,7 +1066,8 @@ class Game {
     this.menus?.show(null);
     this.match.paused = false;
     if (this.match.controller) this.match.controller.enabled = true;
-    this.input.requestLock();
+    if (!this.touchMode && !isMobileOrTouch()) this.input.requestLock();
+    this.touch?.update();
     G.audio?.duck?.(1, 0.01);
     G.music?.resume?.();
   }

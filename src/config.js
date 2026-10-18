@@ -573,10 +573,9 @@ export const TOUCH = {
   // Camera gain for touch look. The mouse path is calibrated for pointer-lock counts, which are unbounded; a drag is
   // bounded by the screen, so a full-width swipe has to be able to turn you around. Scaled by settings.touchSensitivity.
   lookSens: 0.0052,         // radians per CSS pixel (~2.5x the mouse's 0.0021)
-  // Floors for the RENDERER's image settings on a touch device (see rendererQuality). A 3x phone screen shows the
-  // tier's desktop-calibrated 0.75 pixel ratio and zero anti-aliasing as heavy jaggies; these raise only those two.
-  minPixelRatio: 1.5,
-  minMsaa: 2,
+  // Floors for the RENDERER's image settings on a touch device (see rendererQuality).
+  minPixelRatio: 0.8,
+  minMsaa: 0,
   // GPU memory is the binding constraint on a phone, not frame time: Chromium evicts its own compositor shared
   // images when the GPU process runs short, which shows up as DOM tiles failing to rasterise (the loading screen
   // turns to noise) long before the WebGL context itself is lost.
@@ -611,22 +610,76 @@ export const DEFAULT_SETTINGS = {
   touchInvertY: false,      // kept separate from invertY: the natural touch mapping is usually the opposite of the mouse's
 };
 
-// The renderer's view of the quality tier. Touch devices default to `low` for its MEMORY footprint (small atlas,
-// small shadow map) — that part is load-bearing on a phone — but its image settings are calibrated for a desktop
-// monitor: pixelRatio 0.75 and msaa 0 together render the scene at three-quarters of CSS resolution with no
-// anti-aliasing at all, which on a 3x phone screen is a field of jaggies. Sharpen those two knobs only; the
-// storage-related fields (paintAtlas, shadowSize, particles) stay exactly as the tier defines them.
+// The renderer's view of the quality tier. On mobile / touch devices, clamp DPR aggressively, disable
+// post-processing passes (SMAA, bloom, AO) on low and medium, and size the shadow map and paint atlas
+// to fit mobile tile-based GPUs without memory pressure.
 export function rendererQuality(settings, touch) {
-  const q = QUALITY[settings?.quality] || QUALITY.high;
+  const tier = settings?.quality || 'high';
+  const q = QUALITY[tier] || QUALITY.high;
   if (!touch) return q;
-  return { ...q, pixelRatio: Math.max(q.pixelRatio, TOUCH.minPixelRatio), msaa: Math.max(q.msaa, TOUCH.minMsaa) };
+
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+  let pr = q.pixelRatio;
+  let shadow = q.shadowSize;
+  let smaa = false;
+  let bloom = false;
+  let ao = false;
+  let msaa = 0;
+  let paintAtlas = q.paintAtlas;
+
+  if (tier === 'low') {
+    pr = Math.min(dpr, 0.8);
+    shadow = 512;
+    paintAtlas = 1024;
+    smaa = false;
+    bloom = false;
+    ao = false;
+    msaa = 0;
+  } else if (tier === 'medium') {
+    pr = Math.min(dpr, 1.0);
+    shadow = 1024;
+    paintAtlas = 1536;
+    smaa = false;
+    bloom = false;
+    ao = false;
+    msaa = 0;
+  } else if (tier === 'high') {
+    pr = Math.min(dpr, 1.25);
+    shadow = Math.min(q.shadowSize, 2048);
+    paintAtlas = 2048;
+    smaa = false;
+    bloom = !!q.bloom;
+    ao = false;
+    msaa = 0;
+  } else {
+    // ultra
+    pr = Math.min(dpr, 1.5);
+    shadow = 2048;
+    paintAtlas = 4096;
+    smaa = true;
+    bloom = !!q.bloom;
+    ao = !!q.ao;
+    msaa = 2;
+  }
+
+  return {
+    ...q,
+    pixelRatio: pr,
+    shadowSize: shadow,
+    msaa,
+    smaa,
+    bloom,
+    ao,
+    paintAtlas,
+    directRender: tier === 'low' || tier === 'medium',
+  };
 }
 
 // Quality presets consumed by the renderer + fx.
 export const QUALITY = {
   // pixelRatio = cap on devicePixelRatio (Retina screens render at up to this density)
-  low:    { pixelRatio: 0.75, shadowSize: 1024, msaa: 0, bloom: false, ao: false, paintAtlas: 2048, particles: 0.4 },
-  medium: { pixelRatio: 1.0,  shadowSize: 2048, msaa: 2, bloom: true,  ao: false, paintAtlas: 2048, particles: 0.7 },
-  high:   { pixelRatio: 1.5,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  paintAtlas: 4096, particles: 1.0 },
-  ultra:  { pixelRatio: 2.0,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  paintAtlas: 4096, particles: 1.0 },
+  low:    { pixelRatio: 0.75, shadowSize: 512,  msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1024, particles: 0.4 },
+  medium: { pixelRatio: 1.0,  shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1536, particles: 0.7 },
+  high:   { pixelRatio: 1.5,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
+  ultra:  { pixelRatio: 2.0,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
 };

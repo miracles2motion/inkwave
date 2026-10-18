@@ -5,6 +5,8 @@
 //   • bone-aware clustering decimator: builds the 'far' tier from any skinned geometry the builders hand us, keeping
 //     limbs / strands / fingers separate (clusters never straddle two dominant bones → no webbing when joints bend)
 import * as THREE from 'three';
+import { G } from '../core/ctx.js';
+import { isMobileOrTouch } from '../core/touch.js';
 
 export const TIERS = ['hero', 'game', 'far'];
 export const T_HERO = 0, T_GAME = 1, T_FAR = 2;
@@ -16,11 +18,22 @@ export const FADE_S = 0.3;          // cross-fade duration (s)
 // Hysteresis ±12 %. (Default FOV: the local player stands ≈ 28 % of the viewport tall — 250 px at 900 — so from
 // 720p up (≈ 200 px) it is hero at high; a kid across the plaza is ≈ 40–90 px.)
 export const LOD_QUALITY = {
-  low: { hero: Infinity, heroLocal: Infinity, far: 150, menu: T_GAME },
-  medium: { hero: 760, heroLocal: 260, far: 110, menu: T_HERO },
+  low: { hero: Infinity, heroLocal: 180, far: 180, menu: T_HERO },
+  medium: { hero: 760, heroLocal: 220, far: 120, menu: T_HERO },
   high: { hero: 430, heroLocal: 150, far: 78, menu: T_HERO },
   ultra: { hero: 300, heroLocal: 110, far: 54, menu: T_HERO },
 };
+
+/** Get quality tier thresholds adapted for mobile (aggressive far tier & hero only for local player). */
+export function getLodQuality(quality) {
+  const isMobile = isMobileOrTouch();
+  if (isMobile) {
+    if (quality === 'low') return { hero: Infinity, heroLocal: 180, far: 200, menu: T_HERO };
+    if (quality === 'medium') return { hero: Infinity, heroLocal: 200, far: 140, menu: T_HERO };
+  }
+  return LOD_QUALITY[quality] || LOD_QUALITY.high;
+}
+
 export const HYST = 0.12;
 /** Tier for a screen height `px` given the current tier `cur` (hysteresis), quality row `Q` and hero threshold `H`. */
 export function pickTier(px, cur, Q, H = Q.hero) {
@@ -44,6 +57,8 @@ const MAIN_RE = /void\s+main\s*\(\s*\)\s*\{/;
 
 /** A clone of `base` whose fragment shader dithers against `fadeU` ({ value: Vector2 }). Same program for every kid. */
 export function ditherMaterial(base, fadeU) {
+  // Mobile / Low fast-path: avoid fragment shader `discard` to preserve Early-Z / tile GPU efficiency
+  if (isMobileOrTouch() || G.settings?.quality === 'low') return base;
   const m = base.clone();
   const prev = base.onBeforeCompile;
   const key = (base.customProgramCacheKey ? base.customProgramCacheKey() : '') + '|iwLodZ';

@@ -9,6 +9,7 @@ import { G, clamp, angleDiff } from '../core/ctx.js';
 import { PLAYER, DIFFICULTY, SUB, SPECIALS, weaponRange } from '../config.js';
 import { Hit } from './physics.js';
 import { MAIN_KITS, SUB_KITS } from './kits/registry.js';
+import { isMobileOrTouch } from '../core/touch.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _walkHit = new Hit();
@@ -344,9 +345,13 @@ export class BotBrain {
     this.acqT += dt; this.t += dt;
     if (G.boss) { this._bossTick(dt); return; }   // Boss Battle: a different job (below)
 
-    // ---------------- perception
-    if (this.think <= 0) {
-      this.think = 0.15 + Math.random() * 0.1;
+    // ---------------- perception: staggered across frames on mobile / low quality
+    const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+    this.frameCount = (this.frameCount || 0) + 1;
+    const canScan = !isMobileOrLow || ((this.frameCount + (a.slot || 0)) % 3 === 0);
+
+    if (this.think <= 0 && canScan) {
+      this.think = (isMobileOrLow ? 0.25 : 0.15) + Math.random() * 0.1;
       this._perceive();
     }
     const tgt = this.target;
@@ -392,8 +397,8 @@ export class BotBrain {
     } else {
       // our team has already covered the goal area: move on instead of walking over our own ink
       this.goalCheckT -= dt;
-      if (this.goalCheckT <= 0 && this.goal >= 0 && this.path) {
-        this.goalCheckT = 1;
+      if (this.goalCheckT <= 0 && this.goal >= 0 && this.path && canScan) {
+        this.goalCheckT = isMobileOrLow ? 1.5 : 1;
         const g = G.nav.nodes[this.goal], st = G.paint.regionStats(g.x, g.y, g.z, 3, a.team, _stats);
         if (st.n && st.own > 0.85) this.goalTimer = 0;
       }
@@ -1676,7 +1681,9 @@ export class BotBrain {
     const ownPad = G.level.spawnPads[a.team];
     const total = ownPad.distanceTo(enemyPad);
     const mates = G.actors.filter((o) => o !== a && o.team === a.team && o.bot);
-    for (let i = 0; i < 28; i++) {
+    const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+    const iters = isMobileOrLow ? 10 : 28;
+    for (let i = 0; i < iters; i++) {
       const id = nav.validIds[(Math.random() * nav.validIds.length) | 0];
       const n = nav.nodes[id];
       if (n.zone >= 0 || n.wet === 2) continue;
@@ -1707,14 +1714,17 @@ export class BotBrain {
     const a = this.a;
     // search nearby for own ink
     let bestP = null, bd = Infinity;
-    for (let i = 0; i < 14; i++) {
+    const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+    const nClose = isMobileOrLow ? 6 : 14;
+    const nFar = isMobileOrLow ? 6 : 16;
+    for (let i = 0; i < nClose; i++) {
       const ang = Math.random() * Math.PI * 2, r = 1 + Math.random() * 7;
       _v.set(a.pos.x + Math.cos(ang) * r, a.pos.y, a.pos.z + Math.sin(ang) * r);
       const st = G.paint.regionStats(_v.x, _v.y, _v.z, 1.2, a.team, _stats);
       if (st.n && st.own > 0.6 && r < bd) { bd = r; bestP = _v.clone(); }
     }
     // nothing close: look further out, and failing that head back toward our own spawn (always our colour)
-    for (let i = 0; i < 16 && !bestP; i++) {
+    for (let i = 0; i < nFar && !bestP; i++) {
       const ang = Math.random() * Math.PI * 2, r = 8 + Math.random() * 14;
       _v.set(a.pos.x + Math.cos(ang) * r, a.pos.y, a.pos.z + Math.sin(ang) * r);
       const st = G.paint.regionStats(_v.x, _v.y, _v.z, 1.5, a.team, _stats);

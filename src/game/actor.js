@@ -17,11 +17,31 @@ import { PLAYER, WEAPONS, SPECIALS, SUBS } from '../config.js';
 import { makeContacts, Hit, GroundHit, WALKABLE } from './physics.js';
 import { WeaponRunner } from './weapons.js';
 import { MAIN_KITS } from './kits/registry.js';
+import { isMobileOrTouch } from '../core/touch.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _fwd = new THREE.Vector3();
 const DOWN = new THREE.Vector3(0, -1, 0);
 const TAU = Math.PI * 2;
 const _ZERO_MOVE = Object.freeze(new THREE.Vector3());   // move input while planted after a dualies dodge roll
+
+const _camPos = new THREE.Vector3();
+const _camFwd = new THREE.Vector3();
+const _frustum = new THREE.Frustum();
+const _projScreenMatrix = new THREE.Matrix4();
+const _actorSphere = new THREE.Sphere(new THREE.Vector3(), 1.6);
+let _lastFrustumTime = -1;
+
+function getCameraFrustum() {
+  const t = G.time || 0;
+  if (_lastFrustumTime !== t && G.camera) {
+    _lastFrustumTime = t;
+    _projScreenMatrix.multiplyMatrices(G.camera.projectionMatrix, G.camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_projScreenMatrix);
+    G.camera.getWorldPosition(_camPos);
+    G.camera.getWorldDirection(_camFwd);
+  }
+  return _frustum;
+}
 
 // Local-player gamepad rumble (subtle, scaled by settings.rumble, no-op without a pad).
 export function rumble(actor, strong, weak, ms) {
@@ -1012,7 +1032,50 @@ export class Actor {
     ch.root.position.y += this.smoothY + (this.specialActive?.seat || 0);   // riding the crab tank
     ch.root.rotation.y = this.yaw;
     ch.setHurt(Math.max(this.hurtFlash, 1 - this.hp / PLAYER.hp) * (this.hp < PLAYER.hp ? 1 : 0), G.teamColors[this.enemyTeam]);
-    ch.update(dt, a);
+
+    // Local player is always updated at full rate
+    if (this.isLocal || !G.camera) {
+      ch.update(dt, a, false);
+      this._poseDt = 0;
+      this._poseFrame = 0;
+    } else {
+      getCameraFrustum();
+      const dx = this.pos.x - _camPos.x;
+      const dy = this.pos.y - _camPos.y;
+      const dz = this.pos.z - _camPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      const toActorDot = dx * _camFwd.x + dy * _camFwd.y + dz * _camFwd.z;
+      const isBehind = toActorDot < 0;
+      const isMobileOrLow = isMobileOrTouch() || G.settings?.quality === 'low';
+
+      // Offscreen if behind camera (>12m) or outside frustum (>6m)
+      const isOffscreen = (isBehind && distSq > 144) || (distSq > 36 && !_frustum.intersectsSphere(_actorSphere.set(this.pos, 1.6)));
+
+      this._poseDt = (this._poseDt || 0) + dt;
+      this._poseFrame = (this._poseFrame || 0) + 1;
+
+      if (isOffscreen) {
+        // Offscreen / far behind: throttle full pose solving to every 3rd frame
+        if (this._poseFrame % 3 === 0) {
+          ch.update(this._poseDt, a, false);
+          this._poseDt = 0;
+        } else {
+          ch.update(dt, a, true); // skip pose solve
+        }
+      } else if (isMobileOrLow && distSq > 324) {
+        // Visible bots beyond 18m on mobile/low: update pose at half-rate (every 2nd frame, passing dt * 2)
+        if (this._poseFrame % 2 === 0) {
+          ch.update(this._poseDt, a, false);
+          this._poseDt = 0;
+        } else {
+          ch.update(dt, a, true);
+        }
+      } else {
+        // Visible and close: full-rate update
+        ch.update(this._poseDt, a, false);
+        this._poseDt = 0;
+      }
+    }
     this._events(a);
     // swim wake
     if (a.form === 'swim' && hs > 2 && G.fx) {

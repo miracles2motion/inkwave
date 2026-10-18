@@ -11,13 +11,13 @@ else:
     os.makedirs('dist')
 need = set()
 for f in glob.glob('src/**/*.js', recursive=True):
-    need |= {m for m in re.findall(r"three/addons/([A-Za-z0-9_./-]+\.js)", open(f).read())}
+    need |= {m for m in re.findall(r"three/addons/([A-Za-z0-9_./-]+\.js)", open(f, encoding='utf-8', errors='ignore').read())}
 need, seen = list(need), set()
 while need:
     f = need.pop()
     if f in seen: continue
     seen.add(f)
-    for m in re.findall(r"from\s+['\"](\.[^'\"]+)['\"]", open(os.path.join(root, f)).read()):
+    for m in re.findall(r"from\s+['\"](\.[^'\"]+)['\"]", open(os.path.join(root, f), encoding='utf-8', errors='ignore').read()):
         need.append(os.path.normpath(os.path.join(os.path.dirname(f), m)))
 for f in seen:
     d = os.path.join('dist/vendor/three/jsm', f); os.makedirs(os.path.dirname(d), exist_ok=True); shutil.copy(os.path.join(root, f), d)

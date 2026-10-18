@@ -5,6 +5,7 @@
 // Gamepad: radial dead zone + response curve sticks (padStick) and subtle dual-rumble (rumble), scaled by
 // settings.rumble (0..1, default 1) and only while the pad is the active device.
 import { G } from './ctx.js';
+import { isMobileOrTouch } from './touch.js';
 
 // keys whose browser default (focus moves, page scroll) must never fire while the game has the mouse
 const GAME_KEYS = new Set(['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Slash', 'Quote']);
@@ -74,7 +75,12 @@ export class Input {
     window.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this._plock = document.pointerLockElement === this.canvas;
-      if (!this._plock) { this.mouse.left = this.mouse.right = false; this.onUnlock?.(); }
+      if (!this._plock) {
+        this.mouse.left = this.mouse.right = false;
+        if (!this.touch.active && !isMobileOrTouch()) {
+          this.onUnlock?.();
+        }
+      }
     });
   }
 
@@ -115,7 +121,7 @@ export class Input {
   releaseCode(code) { this.keys.delete(code); }
 
   requestLock() {
-    if (this.touch.active || this._plock) return;   // touch has no pointer to lock
+    if (this.touch.active || this._plock || isMobileOrTouch()) return;   // touch has no pointer to lock
     try {
       const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
       // some platforms reject unadjustedMovement: fall back to a plain request

@@ -264,11 +264,12 @@ void main() {
 }`;
 
 export class PaintSystem {
-  constructor(renderer, level, { atlasSize = 4096, maxDensity = 30, cell = 0.25 } = {}) {
+  constructor(renderer, level, { atlasSize = 4096, maxDensity = 30, cell = 0.25, lowQuality = false } = {}) {
     this.renderer = renderer;
     this.level = level;
     this.size = atlasSize;
     this.cell = cell;
+    this.lowQuality = !!lowQuality;
     this.pad = 8;            // ≥ 2^maxInkLod texels so mip levels never bleed between faces
     this._layout(maxDensity);
     this._initGrid();
@@ -690,11 +691,13 @@ export class PaintSystem {
       }
       this._emitGrowth(g, Math.min(tn, 3), dT, bodyDone);
     }
-    // drying: 1/255 of wetness every 1/40 s (≈ 6.4 s from landing to dry), applied in steps of ≥ 2
+    // drying: 1/255 of wetness every 1/40 s (≈ 6.4 s from landing to dry), applied in steps of ≥ 2.
+    // On low quality/mobile: throttle idle drying to steps of ≥ 6, or piggyback whenever quads are already being drawn.
     this._dryAcc += dt;
     const n = Math.floor(this._dryAcc * 40);
-    if (n >= 2) {
-      const k = Math.min(n, 12);
+    const minStep = (this.lowQuality && this.quads === 0) ? 6 : 2;
+    if (n >= minStep) {
+      const k = Math.min(n, this.lowQuality ? 16 : 12);
       this._dryAcc -= k / 40;
       this._dryU.uDry.value = k / 255;
       this.dryMesh.visible = true;

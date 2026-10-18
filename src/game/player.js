@@ -133,8 +133,8 @@ export class PlayerController {
 
     it.jump = inp.down('Space') || inp.padButton(0) || inp.touchHeld('jump');
     it.squid = inp.down('ShiftLeft') || inp.down('ShiftRight') || inp.padValue(6) > 0.3 || inp.touchHeld('squid');
-    it.fire = inp.mouse.left || inp.padValue(7) > 0.3;
-    it.sub = inp.mouse.right || inp.down('KeyE') || inp.padButton(5);
+    it.fire = inp.mouse.left || inp.padValue(7) > 0.3 || inp.touchHeld('fire');
+    it.sub = inp.mouse.right || inp.down('KeyE') || inp.padButton(5) || inp.touchHeld('sub');
     it.special = inp.down('KeyF') || inp.down('KeyQ') || inp.padButton(3) || inp.padButton(11) || inp.touchHeld('special');
     this.mapHeld = inp.down('Tab') || inp.down('KeyM') || inp.padButton(8) || touch.map;
     // "Yeah!" signal (C / d-pad up outside the map): cheers on a teammate's Cheer Orb

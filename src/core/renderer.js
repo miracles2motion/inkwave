@@ -11,7 +11,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { QUALITY, rendererQuality } from '../config.js';
 import { G } from './ctx.js';
-import { shouldUseTouch } from './touch.js';
+import { shouldUseTouch, isMobileOrTouch } from './touch.js';
 
 const BLOOM = [0.28, 0.45, 2.4];   // default bloom: strength, radius, HDR threshold
 
@@ -118,6 +118,12 @@ export class Renderer {
     r.setPixelRatio(pr);
     const w = window.innerWidth, h = window.innerHeight;
     r.setSize(w, h);
+    // Direct render fast-path: bypass EffectComposer completely on low quality and mobile medium without bloom/AO
+    this.useDirectRender = !!(
+      q.directRender ||
+      this.settings?.quality === 'low' ||
+      (this.touch && this.settings?.quality !== 'ultra' && !q.bloom && !q.ao)
+    );
     // MSAA is skipped where it costs the most. On Apple GPUs a multisampled half-float target is brutally slow; on a
     // touch device it is the most bandwidth-hungry object in the frame and a phone has the least bandwidth to give.
     // The trade is worth making because MSAA charges every frame for an edge-smoothing benefit that a single
@@ -151,8 +157,9 @@ export class Renderer {
     // optional screen-FX pass (src/fx/screenfx.js) — runs in HDR linear space before tone mapping/output
     if (this.extraPass) comp.addPass(this.extraPass);
     comp.addPass(new OutputPass());
-    // SMAA stands in for MSAA where MSAA was skipped; it runs on the tone-mapped sRGB image
-    if (q.msaa && !this.samples) comp.addPass(new SMAAPass());
+    // SMAA stands in for MSAA where MSAA was skipped; disable completely on low quality and mobile (unless ultra)
+    const allowSMAA = !this.touch && !isMobileOrTouch() && this.settings?.quality !== 'low';
+    if (q.msaa && !this.samples && (allowSMAA || this.settings?.quality === 'ultra')) comp.addPass(new SMAAPass());
     r.shadowMap.enabled = this.settings.shadows !== false;
     this._w = w; this._h = h;
     this.grade.uniforms.uAspect.value = w / h;
@@ -173,20 +180,27 @@ export class Renderer {
     if (prevQ !== this.q || shadowChanged) {
       if (prevQ !== this.q) this.dynScale = 1;
       this._buildComposer();
-      this.scene?.traverse((o) => { if (o.material) { const m = Array.isArray(o.material) ? o.material : [o.material]; m.forEach((mm) => (mm.needsUpdate = true)); } });
+      this.scene?.traverse((o) => {
+        if (o.material) {
+          const m = Array.isArray(o.material) ? o.material : [o.material];
+          const isLow = this.settings?.quality === 'low' || (this.touch && this.settings?.quality !== 'ultra');
+          m.forEach((mm) => {
+            if (mm.defines) {
+              if (isLow) mm.defines.INK_QUALITY_LOW = 1;
+              else delete mm.defines.INK_QUALITY_LOW;
+            }
+            mm.needsUpdate = true;
+          });
+        }
+      });
     }
     if (this.bloom) this.bloom.enabled = !!(this.q.bloom && settings.bloom);
   }
 
-  // Lowest dynamic scale: never below 0.75 of CSS-pixel density, so Retina screens (preset density > 1) can give
-  // more back.
-  //
-  // Touch devices get no reduction at all, because on them the trade is close to pure loss: this scene is
-  // vertex-bound, not fill-bound, so quadrupling the pixel count (0.5 -> 1.0) measured only 42 -> 39 fps, while the
-  // halved density is immediately visible as blur on a 3x screen. Reducing resolution bought ~3 frames and cost the
-  // whole image.
+  // Lowest dynamic scale: never below 0.75 of CSS-pixel density on desktop.
+  // On mobile / touch devices, scale smoothly down to 0.55 when frame times exceed 20ms (<50 FPS).
   dynFloor() {
-    if (this.touch) return 1;
+    if (this.touch) return 0.55;
     const base = Math.min(window.devicePixelRatio || 1, this.q.pixelRatio);
     return Math.max(0.5, Math.min(0.75, 0.75 / base));
   }
@@ -198,8 +212,10 @@ export class Renderer {
     this.dynScale = s;
     const pr = Math.min(window.devicePixelRatio || 1, this.q.pixelRatio) * s;
     this.renderer.setPixelRatio(pr);
-    this.composer.setPixelRatio(pr);
-    this.composer.setSize(this._w, this._h);
+    if (this.composer) {
+      this.composer.setPixelRatio(pr);
+      this.composer.setSize(this._w, this._h);
+    }
   }
 
   resize() {
@@ -207,10 +223,46 @@ export class Renderer {
     if (w === this._w && h === this._h) return;
     this._w = w; this._h = h;
     this.renderer.setSize(w, h);
-    this.composer.setSize(w, h);
+    if (this.composer) this.composer.setSize(w, h);
     this.gtao?.setSize(w, h);
-    this.grade.uniforms.uAspect.value = w / h;
+    if (this.grade) this.grade.uniforms.uAspect.value = w / h;
     if (this.camera) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
+  }
+
+  _updateDirectFx() {
+    if (!this._directFxEl && this.container) {
+      const el = document.createElement('div');
+      el.id = 'iw-direct-fx';
+      el.style.position = 'absolute';
+      el.style.left = '0';
+      el.style.top = '0';
+      el.style.width = '100%';
+      el.style.height = '100%';
+      el.style.pointerEvents = 'none';
+      el.style.zIndex = '2';
+      el.style.display = 'none';
+      this.container.appendChild(el);
+      this._directFxEl = el;
+    }
+    if (!this._directFxEl) return;
+    const hurt = this.grade?.uniforms?.uHurt?.value || 0;
+    const flash = this.grade?.uniforms?.uFlash?.value || 0;
+    if (hurt <= 0.01 && flash <= 0.01) {
+      if (this._directFxEl.style.display !== 'none') this._directFxEl.style.display = 'none';
+      return;
+    }
+    this._directFxEl.style.display = 'block';
+    if (flash > 0.01 && hurt > 0.01) {
+      const fAlpha = Math.min(0.8, flash);
+      const hAlpha = Math.min(0.7, hurt * 0.6);
+      this._directFxEl.style.background = `radial-gradient(circle, rgba(255,255,255,${fAlpha}) 40%, rgba(255,30,50,${hAlpha}) 100%)`;
+    } else if (flash > 0.01) {
+      const fAlpha = Math.min(0.85, flash);
+      this._directFxEl.style.background = `rgba(255, 255, 255, ${fAlpha})`;
+    } else {
+      const hAlpha = Math.min(0.75, hurt * 0.65);
+      this._directFxEl.style.background = `radial-gradient(circle, transparent 45%, rgba(255, 30, 50, ${hAlpha}) 100%)`;
+    }
   }
 
   render() {
@@ -227,6 +279,14 @@ export class Renderer {
       const bl = gr.bloom || BLOOM;
       this.bloom.strength = bl[0]; this.bloom.radius = bl[1]; this.bloom.threshold = bl[2];
     }
+    // Direct render fast-path: render straight to the default framebuffer when on low / mobile without extra post passes
+    if (this.useDirectRender && (!this.extraPass || !this.extraPass.enabled)) {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+      this._updateDirectFx();
+      return;
+    }
+    if (this._directFxEl) this._directFxEl.style.display = 'none';
     this.composer.render();
   }
 }

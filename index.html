@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0d1020">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -13,15 +13,32 @@
 <link rel="preload" href="assets/fonts/TitanOne-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Rubik-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="styles/ui.css">
+<link rel="stylesheet" href="styles/touch.css">
 <style>
   /* touch-action: none is a prerequisite, not polish: Android Chrome ignores user-scalable=no, so without it the second
      finger of a look+fire gesture is read as a pinch and BOTH pointers get cancelled. overscroll-behavior stops a
      downward drag near the top from turning into pull-to-refresh mid-round. */
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1020; user-select: none; -webkit-user-select: none;
-    touch-action: none; overscroll-behavior: none; -webkit-touch-callout: none; }
-  #app { position: fixed; inset: 0; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0d1020;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-touch-callout: none;
+  }
+  #app, #app canvas, #ui-root {
+    position: fixed;
+    inset: 0;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
   #app canvas { display: block; width: 100%; height: 100%; outline: none; }
-  #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  #ui-root { pointer-events: none; z-index: 10; }
   #fade { position: fixed; inset: 0; background: #0d1020; opacity: 1; pointer-events: all; z-index: 50; transition: opacity 600ms ease; }
   /* Wide enough to read on a phone, scrollable so a long message is never clipped, and selectable so the text can be
      copied off the device. */
@@ -29,17 +46,117 @@
     font: 600 15px/1.45 system-ui, sans-serif; background: #c0263d; padding: 18px 20px; border-radius: 12px;
     width: min(88vw, 560px); max-height: 72vh; overflow: auto; word-break: break-word;
     user-select: text; -webkit-user-select: text; box-shadow: 0 12px 40px rgba(0, 0, 0, .55); }
+
+  /* Rotate Device to Landscape Overlay (Phase 1) */
+  #rotate-device-overlay { display: none; }
+  @media (orientation: portrait) {
+    html.is-mobile-touch #rotate-device-overlay,
+    body.is-mobile-touch #rotate-device-overlay,
+    #rotate-device-overlay.is-visible {
+      display: flex;
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: rgba(13, 16, 32, 0.96);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+      box-sizing: border-box;
+      pointer-events: all;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+      text-align: center;
+    }
+  }
+  .iw-rotate-overlay__content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    max-width: 340px;
+  }
+  .iw-rotate-overlay__icon {
+    width: 72px;
+    height: 72px;
+    color: #ff8a14;
+    animation: iw-rotate-spin 2s ease-in-out infinite;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .iw-rotate-overlay__icon svg {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 4px 16px rgba(255, 138, 20, 0.4));
+  }
+  .iw-rotate-overlay__title {
+    font: 900 clamp(20px, 5.5vmin, 28px) / 1.15 'Rubik', system-ui, sans-serif;
+    color: #ffffff;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+  .iw-rotate-overlay__desc {
+    font: 500 clamp(13px, 3.5vmin, 16px) / 1.45 'Rubik', system-ui, sans-serif;
+    color: #c3bdd6;
+    margin: 0;
+  }
+  @keyframes iw-rotate-spin {
+    0%, 25% { transform: rotate(0deg); }
+    65%, 100% { transform: rotate(90deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .iw-rotate-overlay__icon { animation: none; transform: rotate(90deg); }
+  }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three/build/three.module.js", "three/addons/": "./vendor/three/jsm/" } }
 </script>
 </head>
-<body>
+<body oncontextmenu="return false;">
 <div id="app"></div>
 <div id="ui-root"></div>
 <div id="fade"></div>
 <div id="boot-error"></div>
+<div id="rotate-device-overlay" class="iw-rotate-overlay" aria-hidden="true">
+  <div class="iw-rotate-overlay__content">
+    <div class="iw-rotate-overlay__icon" aria-hidden="true">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="10" y="6" width="28" height="36" rx="4" />
+        <line x1="20" y1="36" x2="28" y2="36" />
+      </svg>
+    </div>
+    <div class="iw-rotate-overlay__title">Rotate Device</div>
+    <div class="iw-rotate-overlay__desc">Please rotate your device to landscape to play INKWAVE.</div>
+  </div>
+</div>
 <script>
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+  (function() {
+    function checkMobile() {
+      var hasTouch = (navigator.maxTouchPoints || 0) > 0;
+      var isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      var ua = navigator.userAgent || '';
+      var isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Tablet/i.test(ua)
+        || Boolean(navigator.userAgentData && navigator.userAgentData.mobile);
+      var isMobileViewport = Math.min(window.innerWidth, window.innerHeight) <= 1024 || window.innerWidth <= 1024;
+      return Boolean(window._dynamicTouchDetected || isMobileUA || ((hasTouch || isCoarse) && (isMobileViewport || isCoarse)));
+    }
+    if (checkMobile()) {
+      document.documentElement.classList.add('is-mobile-touch');
+    }
+    function onFirstTouch() {
+      window._dynamicTouchDetected = true;
+      document.documentElement.classList.add('is-mobile-touch');
+      window.removeEventListener('touchstart', onFirstTouch, true);
+    }
+    window.addEventListener('touchstart', onFirstTouch, { capture: true, passive: true });
+  })();
+
   // fade in once the loading screen is mounted
   window.addEventListener('DOMContentLoaded', () => setTimeout(() => { const f = document.getElementById('fade'); if (f) { f.style.opacity = '0'; f.style.pointerEvents = 'none'; } }, 60));
 
