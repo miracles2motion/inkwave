@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { G, on, emit, clamp, damp } from './core/ctx.js';
 import { Renderer } from './core/renderer.js';
 import { Input } from './core/input.js';
-import { TouchControls, shouldUseTouch, isTouchDevice, isMobileOrTouch, onMobileModeSwitch } from './core/touch.js';
+import { TouchControls, shouldUseTouch, isTouchDevice, isMobileOrTouch, onMobileModeSwitch, syncRotateOverlay } from './core/touch.js';
 import { PerformanceGovernor } from './core/devicePerf.js';
 import { mapTheme,
   DEFAULT_SETTINGS, QUALITY, rendererQuality, TEAM_PALETTES, COLORBLIND_PALETTE, TEAM_NAMES, WEAPONS, WEAPON_ORDER, WEAPON_SUCCESSOR, ZONES, SUB, SUBS, SUB_ORDER, SPECIALS, SPECIAL_ORDER,
@@ -192,7 +192,10 @@ class Game {
           const el = document.documentElement;
           if (document.fullscreenElement || !el.requestFullscreen) return;
           el.requestFullscreen({ navigationUI: 'hide' })
-            .then(() => { screen.orientation?.lock?.('landscape')?.catch?.(() => {}); })
+            .then(() => {
+              screen.orientation?.lock?.('landscape')?.catch?.(() => {});
+              this.forceWindowResize();
+            })
             .catch(() => { /* refused — stay armed and try again on the next gesture */ });
         };
         // Stay armed until a request actually succeeds, and re-arm whenever fullscreen is left. A one-shot listener
@@ -201,7 +204,15 @@ class Game {
         // session. Once it succeeds the listener comes off, so nothing is re-requested on every later tap.
         const arm = () => window.addEventListener('pointerdown', enterFs, true);
         const disarm = () => window.removeEventListener('pointerdown', enterFs, true);
-        document.addEventListener('fullscreenchange', () => { if (document.fullscreenElement) disarm(); else arm(); });
+        document.addEventListener('fullscreenchange', () => {
+          if (document.fullscreenElement) disarm(); else arm();
+          this.forceWindowResize();
+        });
+        document.addEventListener('webkitfullscreenchange', () => this.forceWindowResize());
+        window.addEventListener('orientationchange', () => this.forceWindowResize());
+        screen.orientation?.addEventListener?.('change', () => this.forceWindowResize());
+        window.visualViewport?.addEventListener?.('resize', () => this.forceWindowResize());
+        window.addEventListener('resize', () => { this.R?.resize(); syncRotateOverlay(); });
         if (!document.fullscreenElement) arm();
       }
       // There is no pointer lock to lose on a phone, so _onPointerUnlock never fires and nothing would stop a round
@@ -374,6 +385,19 @@ class Game {
       this.R.applySettings(this.settings);
     }
     this.touch?.update();
+    this.forceWindowResize();
+  }
+
+  forceWindowResize() {
+    this.R?.resize(true);
+    syncRotateOverlay();
+    const steps = [40, 100, 200, 350, 600, 1000];
+    for (const ms of steps) {
+      setTimeout(() => {
+        this.R?.resize(true);
+        syncRotateOverlay();
+      }, ms);
+    }
   }
 
   // Build (or rebuild) everything that depends on the stage layout: level, collision, paint atlas, surface material,

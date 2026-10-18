@@ -116,13 +116,20 @@ export class Renderer {
     this.dynScale = this.dynScale || 1;
     const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * this.dynScale;
     r.setPixelRatio(pr);
-    const w = window.innerWidth, h = window.innerHeight;
-    r.setSize(w, h);
+    const el = this.container || (typeof document !== 'undefined' ? document.getElementById('app') : null) || (typeof document !== 'undefined' ? document.body : null);
+    const w = Math.round(el?.clientWidth || window.innerWidth || 1);
+    const h = Math.round(el?.clientHeight || window.innerHeight || 1);
+    r.setSize(w, h, false);
+    if (r.domElement) {
+      r.domElement.style.width = '100%';
+      r.domElement.style.height = '100%';
+    }
     // Direct render fast-path: bypass EffectComposer completely on low quality and mobile medium without bloom/AO
     this.useDirectRender = !!(
       q.directRender ||
       this.settings?.quality === 'low' ||
-      (this.touch && this.settings?.quality !== 'ultra' && !q.bloom && !q.ao)
+      (this.touch && this.settings?.quality !== 'ultra' && !q.bloom && !q.ao) ||
+      (isMobileOrTouch() && this.settings?.quality !== 'ultra' && !q.bloom && !q.ao)
     );
     // MSAA is skipped where it costs the most. On Apple GPUs a multisampled half-float target is brutally slow; on a
     // touch device it is the most bandwidth-hungry object in the frame and a phone has the least bandwidth to give.
@@ -222,11 +229,21 @@ export class Renderer {
     }
   }
 
-  resize() {
-    const w = window.innerWidth, h = window.innerHeight;
-    if (w === this._w && h === this._h) return;
+  resize(force = false) {
+    const el = this.container || (typeof document !== 'undefined' ? document.getElementById('app') : null) || (typeof document !== 'undefined' ? document.body : null);
+    const cw = el?.clientWidth || 0, ch = el?.clientHeight || 0;
+    const ww = typeof window !== 'undefined' ? (window.innerWidth || 1) : 1;
+    const wh = typeof window !== 'undefined' ? (window.innerHeight || 1) : 1;
+    const w = cw > 10 ? cw : ww;
+    const h = ch > 10 ? ch : wh;
+
+    if (!force && w === this._w && h === this._h) return;
     this._w = w; this._h = h;
-    this.renderer.setSize(w, h);
+    this.renderer.setSize(w, h, false);
+    if (this.renderer.domElement) {
+      this.renderer.domElement.style.width = '100%';
+      this.renderer.domElement.style.height = '100%';
+    }
     if (this.composer) this.composer.setSize(w, h);
     this.gtao?.setSize(w, h);
     if (this.grade) this.grade.uniforms.uAspect.value = w / h;
@@ -284,7 +301,8 @@ export class Renderer {
       this.bloom.strength = bl[0]; this.bloom.radius = bl[1]; this.bloom.threshold = bl[2];
     }
     // Direct render fast-path: render straight to the default framebuffer when on low / mobile without extra post passes
-    if (this.useDirectRender && (!this.extraPass || !this.extraPass.enabled)) {
+    const isMobile = this.touch || isMobileOrTouch();
+    if (this.useDirectRender && (!this.extraPass || !this.extraPass.enabled || isMobile)) {
       this.renderer.setRenderTarget(null);
       this.renderer.render(this.scene, this.camera);
       this._updateDirectFx();

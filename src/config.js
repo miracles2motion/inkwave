@@ -632,7 +632,7 @@ export function rendererQuality(settings, touch) {
   let paintAtlas = q.paintAtlas;
 
   if (tier === 'low') {
-    pr = Math.min(dpr, 0.8);
+    pr = Math.min(dpr, 0.75);
     shadow = 512;
     paintAtlas = 1024;
     smaa = false;
@@ -640,9 +640,9 @@ export function rendererQuality(settings, touch) {
     ao = false;
     msaa = 0;
   } else if (tier === 'medium') {
-    pr = Math.min(dpr, 1.0);
-    shadow = 1024;
-    paintAtlas = 1536;
+    pr = Math.min(dpr, 0.85);
+    shadow = 512;
+    paintAtlas = 1024;
     smaa = false;
     bloom = false;
     ao = false;

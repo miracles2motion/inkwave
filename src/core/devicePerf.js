@@ -2,23 +2,18 @@
 // Automatically benchmarks and scores each individual device's GPU and system capacity (0.0 to 1.0)
 // and dynamically scales resolution and quality so every player achieves a smooth 60 FPS experience.
 
+import { isMobileOrTouch, onMobileModeSwitch } from './touch.js';
+
 let _cachedProfile = null;
+if (typeof onMobileModeSwitch === 'function') {
+  onMobileModeSwitch(() => {
+    _cachedProfile = null;
+  });
+}
 
 function detectMobile() {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
-  if (window._dynamicTouchDetected) return true;
-  const ua = navigator.userAgent || navigator.vendor || window.opera || '';
-  const isIPad = (navigator.platform === 'MacIntel' || /iPad/i.test(ua)) && (navigator.maxTouchPoints || 0) > 1;
-  const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Tablet/i.test(ua)
-    || Boolean(navigator?.userAgentData?.mobile)
-    || isIPad;
-  if (isMobileUA) return true;
-  const isCoarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
-  const hasTouchPoints = (navigator.maxTouchPoints || 0) > 0;
-  const isMobileViewport = typeof window.innerWidth === 'number' && (
-    Math.min(window.innerWidth, window.innerHeight) <= 768 || window.innerWidth <= 768
-  );
-  return Boolean(isCoarse && hasTouchPoints && isMobileViewport);
+  return isMobileOrTouch();
 }
 
 /**
@@ -75,10 +70,10 @@ export function getDeviceProfile() {
   if (isMobile) {
     if (isHighGpu && ram >= 6 && cores >= 6) {
       tier = 'medium';
-      baselineFactor = 0.85;
+      baselineFactor = 0.80;
     } else if (isMedGpu && ram >= 4) {
       tier = 'low';
-      baselineFactor = 0.70;
+      baselineFactor = 0.65;
     } else {
       tier = 'low';
       baselineFactor = 0.55;

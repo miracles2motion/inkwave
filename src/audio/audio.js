@@ -92,7 +92,8 @@ export class AudioEngine {
   constructor(opts = {}) {
     this.opts = opts;
     this.ctx = null; this.ready = false; this.offline = false;
-    this.hrtf = opts.hrtf ?? true;
+    const isMobile = isMobileOrTouch();
+    this.hrtf = opts.hrtf ?? (!isMobile);
     this.vol = { master: DEFAULT_SETTINGS.master ?? 0.8, music: DEFAULT_SETTINGS.music ?? 0.6, sfx: DEFAULT_SETTINGS.sfx ?? 0.85 };
     this.byName = new Map(); this.voices = []; this.loops = new Set(); this.last = new Map();
     this.L = { x: 0, y: 0, z: 0 };
@@ -108,7 +109,9 @@ export class AudioEngine {
     if (!ctx) {
       const AC = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
       if (!AC) return this;
-      try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { try { ctx = new AC(); } catch (e2) { return this; } }
+      const isMobile = isMobileOrTouch();
+      const hint = isMobile ? 'balanced' : 'interactive';
+      try { ctx = new AC({ latencyHint: hint }); } catch (e) { try { ctx = new AC(); } catch (e2) { return this; } }
     }
     this.ctx = ctx;
     this.offline = typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
@@ -120,11 +123,14 @@ export class AudioEngine {
     this.sfxIn = g(1);
     this.sfxIn.connect(this.sfxBus); this.sfxBus.connect(this.master);
     this.musicBus.connect(this.duckG); this.duckG.connect(this.master);
-    // shared plaza reverb
-    this.revSend = g(1);
+    // shared plaza reverb (bypassed on mobile to prevent buffer underruns and audio stutters)
+    const isMobile = isMobileOrTouch();
+    this.revSend = g(isMobile ? 0 : 1);
     this.conv = ctx.createConvolver();
-    this.conv.buffer = makeImpulse(ctx, 1.5, 3.4, { pre: 0.012, seed: 3 });
-    this.revRet = g(0.6);
+    if (!isMobile) {
+      this.conv.buffer = makeImpulse(ctx, 1.5, 3.4, { pre: 0.012, seed: 3 });
+    }
+    this.revRet = g(isMobile ? 0 : 0.6);
     this.revSend.connect(this.conv); this.conv.connect(this.revRet); this.revRet.connect(this.sfxBus);
     // master dynamics: gentle glue then a safety limiter
     // sub-sonic / DC safety high-pass on everything
