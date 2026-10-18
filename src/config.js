@@ -683,7 +683,7 @@ export function rendererQuality(settings, touch) {
 export const QUALITY = {
   // pixelRatio = cap on devicePixelRatio (Retina screens render at up to this density)
   low:    { pixelRatio: 0.75, shadowSize: 512,  msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1024, particles: 0.4 },
-  medium: { pixelRatio: 1.0,  shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1536, particles: 0.7 },
+  medium: { pixelRatio: 1.0,  shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 2048, particles: 0.8 },
   high:   { pixelRatio: 1.25, shadowSize: 2048, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
   ultra:  { pixelRatio: 2.0,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
   get auto() {

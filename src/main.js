@@ -1370,7 +1370,7 @@ class Game {
     const sm = G.renderer.shadowMap;
     sm.autoUpdate = false;
     const inMenu = G.mode === 'menu' || !!(m && m.attract);
-    if (!inMenu && this.settings.quality !== 'low') sm.needsUpdate = true;
+    if (!inMenu && this.settings.quality === 'ultra') sm.needsUpdate = true;
     else if (inMenu ? (this._frameN % 3 === 0) : (this._frameN & 1)) sm.needsUpdate = true;
     if (!this._skipRender) {
       if (!setUp) this.R.render();

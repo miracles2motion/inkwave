@@ -85,15 +85,18 @@ export function getDeviceProfile() {
     }
   } else {
     // Desktop / Laptop
-    if (isUltraGpu && ram >= 16 && cores >= 8) {
-      tier = 'ultra';
-      baselineFactor = 1.0;
-    } else if (isHighGpu && ram >= 8) {
+    // Laptops and battery-constrained systems have confined thermal dissipation;
+    // Auto selects the balanced 'medium' preset (direct 1-pass render, native 1:1 pixels, 1024 shadows,
+    // no GTAO raymarching or 4x MSAA thrashing) for locked 60 FPS and cool thermals.
+    const hasBattery = typeof navigator !== 'undefined' && ('getBattery' in navigator || 'battery' in navigator);
+    const isEnthusiastDesktop = isUltraGpu && ram >= 16 && cores >= 12 && !hasBattery;
+
+    if (isEnthusiastDesktop) {
       tier = 'high';
       baselineFactor = 0.95;
-    } else if (isMedGpu && !isLowGpu && ram >= 6) {
+    } else if (isHighGpu || (isMedGpu && !isLowGpu)) {
       tier = 'medium';
-      baselineFactor = 0.80;
+      baselineFactor = 0.85;
     } else {
       tier = 'low';
       baselineFactor = 0.65;
