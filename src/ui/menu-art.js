@@ -633,12 +633,15 @@ function previewQuality(ctx) {
   const el = h('div', { class: 'iw-pv iw-pv--quality' }, ladder, chips);
   const Q = ctx.qualityTable || {};
   const set = (v) => {
+    const isAuto = v === 'auto';
     const q = Q[v] || Q.high || {};
-    ladder.querySelectorAll('.iw-pv-ladder__col').forEach((c) => c.classList.toggle('is-on', c.dataset.q === v));
+    const effectiveTier = isAuto ? (Q.auto === Q.low ? 'low' : Q.auto === Q.medium ? 'medium' : Q.auto === Q.ultra ? 'ultra' : 'high') : v;
+    ladder.querySelectorAll('.iw-pv-ladder__col').forEach((c) => c.classList.toggle('is-on', c.dataset.q === effectiveTier));
     const rows = [
+      ['Mode', isAuto ? 'Adaptive (60 FPS)' : 'Fixed Tier'],
       ['Pixel density', `up to ${(+q.pixelRatio || 1).toFixed(q.pixelRatio % 1 ? 2 : 1).replace(/0$/, '')}×`],
       ['Shadow map', `${q.shadowSize || 0}px`],
-      ['Anti-aliasing', q.msaa ? `${q.msaa}× MSAA` : 'Off'],
+      ['Anti-aliasing', q.msaa ? `${q.msaa}× MSAA` : (q.smaa ? 'SMAA' : 'Off')],
       ['Ink detail', `${Math.round((q.paintAtlas || 2048) / 1024)}K atlas`],
       ['Ambient occlusion', q.ao ? 'On' : 'Off'],
       ['Particles', `${Math.round((q.particles ?? 1) * 100)}%`],

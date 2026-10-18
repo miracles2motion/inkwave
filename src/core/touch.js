@@ -91,21 +91,20 @@ export function isMobileOrTouch() {
   if (_dynamicTouchDetected || _mobileTouchDetected) return true;
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
 
-  const hasTouchPoints = (navigator.maxTouchPoints || 0) > 0;
-  const isCoarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
   const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+  const isIPad = (navigator.platform === 'MacIntel' || /iPad/i.test(ua)) && (navigator.maxTouchPoints || 0) > 1;
   const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Tablet/i.test(ua)
-    || Boolean(navigator?.userAgentData?.mobile);
+    || Boolean(navigator?.userAgentData?.mobile)
+    || isIPad;
+  if (isMobileUA) return true;
+
+  const isCoarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const hasTouchPoints = (navigator.maxTouchPoints || 0) > 0;
   const isMobileViewport = typeof window.innerWidth === 'number' && (
-    Math.min(window.innerWidth, window.innerHeight) <= 1024 || window.innerWidth <= 1024
+    Math.min(window.innerWidth, window.innerHeight) <= 768 || window.innerWidth <= 768
   );
 
-  return Boolean(
-    _dynamicTouchDetected ||
-    _mobileTouchDetected ||
-    isMobileUA ||
-    ((hasTouchPoints || isCoarse) && (isMobileViewport || isCoarse))
-  );
+  return Boolean(isCoarse && hasTouchPoints && isMobileViewport);
 }
 
 export function isTouchDevice() {

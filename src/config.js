@@ -1,4 +1,5 @@
-// Shared tuning + content definitions. Every module reads from here; nothing here imports anything.
+// Shared tuning + content definitions. Every module reads from here; device profile is imported for adaptive quality.
+import { getAutoQualityTier } from './core/devicePerf.js';
 
 export const GAME_TITLE = 'INKWAVE';
 export const GAME_SUBTITLE = 'Turf Riot';
@@ -587,7 +588,7 @@ export const DEFAULT_SETTINGS = {
   padSensitivity: 1.0,
   invertY: false,
   fov: 82,                  // horizontal FOV at 16:9, 65..100
-  quality: 'high',          // 'low' | 'medium' | 'high' | 'ultra'
+  quality: 'auto',          // 'auto' | 'low' | 'medium' | 'high' | 'ultra'
   qualityChosen: false,     // set when the player picks a tier in the settings; the touch default only applies while false
   shadowsChosen: false,     // …and the same for shadows, which the touch default also overrides — tracked separately
                             // so that picking a quality does not drag the shadow setting along with it
@@ -614,7 +615,10 @@ export const DEFAULT_SETTINGS = {
 // post-processing passes (SMAA, bloom, AO) on low and medium, and size the shadow map and paint atlas
 // to fit mobile tile-based GPUs without memory pressure.
 export function rendererQuality(settings, touch) {
-  const tier = settings?.quality || 'high';
+  let tier = settings?.quality || 'auto';
+  if (tier === 'auto') {
+    tier = getAutoQualityTier();
+  }
   const q = QUALITY[tier] || QUALITY.high;
   if (!touch) return q;
 
@@ -682,4 +686,7 @@ export const QUALITY = {
   medium: { pixelRatio: 1.0,  shadowSize: 1024, msaa: 0, bloom: false, ao: false, smaa: false, paintAtlas: 1536, particles: 0.7 },
   high:   { pixelRatio: 1.5,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
   ultra:  { pixelRatio: 2.0,  shadowSize: 4096, msaa: 4, bloom: true,  ao: true,  smaa: true,  paintAtlas: 4096, particles: 1.0 },
+  get auto() {
+    return QUALITY[getAutoQualityTier()] || QUALITY.medium;
+  },
 };

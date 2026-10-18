@@ -64,6 +64,7 @@ export class Input {
       this.lastDevice = 'kbm';
     });
     window.addEventListener('mousedown', (e) => {
+      this.lastDevice = 'kbm';
       if (!this._plock) return;
       if (e.button === 0) { this.mouse.left = true; this.mouse.leftPressed = true; }
       if (e.button === 2) { this.mouse.right = true; this.mouse.rightPressed = true; }
@@ -121,7 +122,8 @@ export class Input {
   releaseCode(code) { this.keys.delete(code); }
 
   requestLock() {
-    if (this.touch.active || this._plock || isMobileOrTouch()) return;   // touch has no pointer to lock
+    if (this._plock) return;
+    if (this.touch.active && isMobileOrTouch()) return;   // touch on mobile device has no pointer to lock
     try {
       const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
       // some platforms reject unadjustedMovement: fall back to a plain request
@@ -157,10 +159,19 @@ export class Input {
     const t = this.touch;
     if (!t.active) return;
     const left = this.touchHeld('fire'), right = this.touchHeld('sub');
+    if (left || right) {
+      this.lastDevice = 'touch';
+    }
     this.mouse.leftPressed = this.mouse.leftPressed || (left && !this._touchPrev.left);
     this.mouse.rightPressed = this.mouse.rightPressed || (right && !this._touchPrev.right);
     this._touchPrev.left = left; this._touchPrev.right = right;
-    this.mouse.left = left; this.mouse.right = right;
+    if (this.lastDevice === 'touch') {
+      this.mouse.left = left;
+      this.mouse.right = right;
+    } else {
+      if (left) this.mouse.left = true;
+      if (right) this.mouse.right = true;
+    }
   }
 
   padButton(i) { return !!(this.pad && this.pad.buttons[i] && this.pad.buttons[i].pressed); }

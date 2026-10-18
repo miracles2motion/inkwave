@@ -4,6 +4,7 @@ import { G, on, emit, clamp, damp } from './core/ctx.js';
 import { Renderer } from './core/renderer.js';
 import { Input } from './core/input.js';
 import { TouchControls, shouldUseTouch, isTouchDevice, isMobileOrTouch, onMobileModeSwitch } from './core/touch.js';
+import { PerformanceGovernor } from './core/devicePerf.js';
 import { mapTheme,
   DEFAULT_SETTINGS, QUALITY, rendererQuality, TEAM_PALETTES, COLORBLIND_PALETTE, TEAM_NAMES, WEAPONS, WEAPON_ORDER, WEAPON_SUCCESSOR, ZONES, SUB, SUBS, SUB_ORDER, SPECIALS, SPECIAL_ORDER,
   MAPS, DIFFICULTY, PLAYER, PROGRESSION, VERSION, MATCH, OFFLINE_MAPS, mapOfflineOk, mapNoBots, mapBossOk,
@@ -136,6 +137,7 @@ class Game {
     // renderer / scene
     this.R = new Renderer(app, this.settings);
     G.renderer = this.R.renderer;
+    this.perfGovernor = new PerformanceGovernor(this.R);
     // Device capability probe. Reported before anything heavy runs so it arrives even when a later step dies, and it
     // is the only way to see a phone's real limits without a console on that phone.
     try {
@@ -210,9 +212,12 @@ class Game {
       };
       document.addEventListener('visibilitychange', this._onHide);
     }
-    // after a focus steal while the map was held, the next click on the game takes the mouse back (no pause detour)
+    // after a focus steal or click back into window, clicking the game takes the mouse back (no pause detour)
     this.R.renderer.domElement.addEventListener('mousedown', () => {
-      if (!this.touchMode && !isMobileOrTouch() && this._relock && G.mode === 'match' && this.match && !this.match.paused && !this.menus?.current) { this._relock = false; this.input.requestLock(); }
+      if (!this.touchMode && !isMobileOrTouch() && G.mode === 'match' && this.match && !this.match.paused && !this.menus?.current) {
+        this._relock = false;
+        if (!this.input._plock) this.input.requestLock();
+      }
     });
 
     // modules built by other authors
@@ -572,7 +577,10 @@ class Game {
     Object.assign(this.settings, partial);
     // An explicit pick must outrank the touch-device default (see boot()). Tracked separately per setting: choosing a
     // quality says nothing about whether the player wants shadows.
-    if ('quality' in partial) this.settings.qualityChosen = true;
+    if ('quality' in partial) {
+      this.settings.qualityChosen = true;
+      this.perfGovernor?.reset();
+    }
     if ('shadows' in partial) this.settings.shadowsChosen = true;
     saveJSON('inkwave.settings', this.settings);
     if ('quality' in partial || 'shadows' in partial || 'bloom' in partial) this.R?.applySettings(this.settings);
@@ -1263,27 +1271,11 @@ class Game {
     return Math.max(this._vs?.ms || 1000 / 60, cap ? 1000 / cap : 0);
   }
 
-  // hold the frame target: when a 4 s window of a live round averages over ~112% of it (frames missing vsync, which
-  // on a 120 Hz display reads as 8/16 ms judder), drop render density one notch. Stepping back up needs 12 s locked
-  // at the target, and a down-step re-arms that allowance — see below.
+  // Adapt resolution scale and frame pacing via PerformanceGovernor to lock 60 FPS
   _dynRes(dt) {
-    if (dt <= 0 || dt > 0.25) return;
-    const d = this._dyn || (this._dyn = { acc: 0, n: 0, t: 0, fast: 0, ups: 0 });
-    d.acc += dt; d.n++; d.t += dt;
-    if (d.t < 4) return;
-    const avg = d.acc / d.n;
-    d.acc = 0; d.n = 0; d.t = 0;
     const m = this.match;
-    if (this.settings.quality === 'ultra' || document.hidden || !m || m.attract || m.state !== 'playing') { d.fast = 0; return; }
-    const s = this.R.dynScale || 1, tgt = this._frameTarget() / 1000;
-    // `ups` caps how many times the scale may climb back, so the image never pumps between sizes (re-sizing every
-    // couple of seconds read as flicker). It is deliberately NOT a lifetime budget: a down-step means the device's
-    // conditions actually changed, so it re-arms the allowance. Without that, one transient spike (another tab, a
-    // thermal moment, a hitch while a shader compiles) pins the game at low resolution for the rest of the session
-    // even after the cause is long gone — which is what a player experiences as "the game is stuck looking bad".
-    if (avg > tgt * 1.12 && s > this.R.dynFloor() + 0.01) { this.R.setDynamicScale(s - 0.125); d.fast = 0; d.ups = 0; }
-    else if (avg < tgt * 1.04 && s < 1 && d.ups < 2) { if (++d.fast >= 3) { this.R.setDynamicScale(s + 0.125); d.fast = 0; d.ups++; } }
-    else d.fast = 0;
+    const playing = !!m && !m.attract && m.state === 'playing' && !document.hidden;
+    this.perfGovernor?.update(dt, playing, this.settings.quality);
   }
 
   _frame(dt) {
