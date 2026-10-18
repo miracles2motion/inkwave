@@ -67,6 +67,8 @@ export function getDeviceProfile() {
   let tier = 'medium';
   let baselineFactor = 0.75;
 
+  const hasBattery = typeof navigator !== 'undefined' && ('getBattery' in navigator || 'battery' in navigator);
+
   if (isMobile) {
     if (isHighGpu && ram >= 6 && cores >= 6) {
       tier = 'medium';
@@ -83,7 +85,6 @@ export function getDeviceProfile() {
     // Laptops and battery-constrained systems have confined thermal dissipation;
     // Auto selects the balanced 'medium' preset (direct 1-pass render, native 1:1 pixels, 1024 shadows,
     // no GTAO raymarching or 4x MSAA thrashing) for locked 60 FPS and cool thermals.
-    const hasBattery = typeof navigator !== 'undefined' && ('getBattery' in navigator || 'battery' in navigator);
     const isEnthusiastDesktop = isUltraGpu && ram >= 16 && cores >= 12 && !hasBattery;
 
     if (isEnthusiastDesktop) {
@@ -99,7 +100,6 @@ export function getDeviceProfile() {
   }
 
   // Calculate hardware capability tier ('enthusiast' | 'high' | 'medium' | 'low')
-  const hasBattery = typeof navigator !== 'undefined' && ('getBattery' in navigator || 'battery' in navigator);
   let hwTier = 'medium';
   if (isUltraGpu && !hasBattery && !isMobile && ram >= 16 && cores >= 8) {
     hwTier = 'enthusiast';
